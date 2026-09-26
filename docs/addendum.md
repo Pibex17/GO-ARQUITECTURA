@@ -1,7 +1,7 @@
 # Hito 1 · Addendum técnico
 
-**Pareja:** Nombre Apellido · Nombre Apellido
-**Paralelo:** (el suyo)
+**Pareja:** Nilo Aragundi · Jorge Castro
+**Paralelo:** A
 
 <!-- Aquí va lo que no cabe en las diapositivas. Se entrega junto con la ficha, en docs/hito1_addendum.md.
      Borren todos los comentarios como este antes de entregar. -->
@@ -12,14 +12,18 @@
 
 ```
 .
-├── main.go
-├── go.mod
-├── internal/
-│   └── <negocio>/
-│       ├── modelos.go
-│       ├── manejadores.go
-│       └── rutas.go
-└── docs/
+├───.github
+│   └───workflows
+├───cdm
+│   └───servidor
+├───docs
+└───internal
+    ├───config
+    ├───database
+    ├───handlers
+    ├───middleware
+    ├───models
+    └───routes
 ```
 
 ## B. Configuración y secretos
