@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Verificación y pruebas
+        run: |
+          if [ -f go.mod ]; then
+            gofmt -l .
+            go vet ./...
+            go test ./...
+          else
+            echo "Aún no hay go.mod — el pipeline queda en espera (se activa como requisito en la semana 4)."
+          fi
