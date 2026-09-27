@@ -1,0 +1,40 @@
+# Levanta la base de datos y el servidor juntos.
+# Uso: docker compose up --build
+#
+# La primera vez, o si borraron el volumen, hay que crear las tablas:
+#   docker compose run --rm app -reset
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: canchas
+    ports:
+      - "5432:5432"
+    volumes:
+      - datos_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Dentro de la red de Docker, la base no se llama "localhost": se
+      # llama como el servicio de arriba, "db". Fuera de Docker (go run .
+      # en su máquina) sigue siendo "localhost", por eso este valor va
+      # aquí y no en el .env que usan para correr sin Docker.
+      DATABASE_URL: host=db user=postgres password=postgres dbname=canchas port=5432
+      PUERTO: 8080
+      TIEMPO_ESPERA_SEGUNDOS: 5
+    ports:
+      - "8080:8080"
+
+volumes:
+  datos_postgres:

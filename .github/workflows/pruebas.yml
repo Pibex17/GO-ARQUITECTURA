@@ -1,0 +1,13 @@
+# Corre las pruebas en GitHub cada vez que se sube código.
+# No necesita base de datos: las pruebas de este proyecto no la tocan.
+name: pruebas
+on: [push, pull_request]
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./... -v

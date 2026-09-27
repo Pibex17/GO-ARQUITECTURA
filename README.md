@@ -1,56 +1,81 @@
-# [Nombre del producto]
+# Sistema de reservas de canchas de fútbol sintéticas
 
-> Reemplacen todo lo que está entre corchetes en su primer commit.
-> Este README es la puerta de entrada del repositorio: en la semana 1 otra pareja debe poder levantar el servidor siguiendo solo lo que dice aquí, y desde la semana 4 es la base de la integración continua.
+Servidor HTTP en Go (Chi + GORM/PostgreSQL) para el Hito 1 de Aplicaciones Web II.
 
-**Hilo Servidor · ULEAM · Período 2026-2**
-Aplicaciones Web II (TDI-610) · Aplicación para el Servidor Web (IS-503)
-
-## Integrantes
-
-| Integrante | Usuario de GitHub | Paralelo |
-| --- | --- | --- |
-| [Aragundi Nilo] | [usuario] | [Servidor Web A / Web II A / Web II B] |
-| [Castro Jorge] | [usuario] | [Servidor Web A / Web II A / Web II B] |
-
-## El producto
-
-[Una o dos líneas: qué negocio es y qué vende. Se completa cuando la ficha del negocio pase la compuerta de la semana 3. Mientras tanto, el dominio de trabajo es la mesa de ayuda.]
-
-## Cómo levantar el servidor
+## Cómo arrancar
 
 ```bash
-go run .
+go mod tidy
+cp .env.example .env        # y complete la contraseña real de su PostgreSQL
+psql -U postgres -c "CREATE DATABASE canchas;"
+go run . -reset             # primera vez: crea las tablas y siembra datos de ejemplo
 ```
 
-El servidor responde en `http://localhost:8080`.
+Debe imprimir `escuchando en el puerto 8080`. En arranques posteriores, sin `-reset`.
 
-Requisitos: Go (versión estable) y PostgreSQL.
+## Cómo arrancar con Docker
 
-## Base de datos
-
-- Opción usada por la pareja: [nativa / contenedor]
-- Con contenedor: `docker run --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:16`
-- Base de datos del proyecto: `[nombre]`
-
-## Cómo correr las pruebas
+No hace falta tener Go ni PostgreSQL instalados en la máquina: Docker arma los dos contenedores.
 
 ```bash
-go test ./...
+docker compose up --build
 ```
 
-Las pruebas corren también en la integración continua (pestaña Actions). Desde la semana 4, un entregable cuyas pruebas no pasan en la integración no se recibe.
+La primera vez (o si borran el volumen `datos_postgres`), en otra terminal, para crear las tablas y sembrar los datos de ejemplo:
 
-## Convenciones del repositorio
+```bash
+docker compose run --rm app -reset
+```
 
-- Un commit de cada integrante como mínimo por taller; el commit de cierre se hace en clase.
-- Mensajes de commit: qué cambió y por qué, entendibles sin el autor presente.
-- Uso de IA declarado en el cuerpo del commit: una línea con qué herramienta y para qué parte.
-- Ningún secreto en el código ni en el historial: la configuración se externaliza (semana 4).
+Dentro de Docker, `DATABASE_URL` apunta a `host=db` (el nombre del servicio en `docker-compose.yml`), no a `localhost`; ese valor se define ahí mismo, no en el `.env` que usan para correr sin Docker. El resto del comportamiento —rutas, validaciones, envoltura de respuestas— es exactamente el mismo con o sin Docker: es la misma imagen la que corre.
+
+Para bajar todo (y borrar los datos):
+
+```bash
+docker compose down -v
+```
+
+## Pruebas
+
+```bash
+go test ./... -v
+```
 
 ## Estructura
 
 ```
-docs/ficha_negocio.md   → ficha del negocio (se entrega antes del día A de la semana 3)
-main.go                 → punto de entrada del servidor
+.
+├── main.go                     # conexión, AutoMigrate, semillas, rutas
+├── go.mod / go.sum
+├── .env.example                 # sí se sube
+├── .env                          # NO se sube (está en .gitignore)
+├── .github/workflows/pruebas.yml
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── docs/decisiones.md
+└── internal/
+    ├── respuesta/        # envoltura única {"ok": ...}
+    ├── middleware/       # Registro y Recuperacion
+    ├── config/           # lee .env
+    ├── usuarios/         # Usuario (sin rutas propias todavía)
+    ├── canchas/          # Cancha, Horario + CRUD del catálogo
+    └── reservas/         # Reserva (máquina de estados), Pago + pruebas
 ```
+
+## Rutas
+
+| Método | Ruta | Éxito | Errores posibles |
+| --- | --- | --- | --- |
+| GET | /canchas | 200 catálogo de canchas activas (o `?administrador_id=` para ver las propias) | 500 error_base |
+| POST | /canchas | 201 cancha creada | 400 cuerpo_malformado · 422 datos_invalidos · 422 tipo_invalido · 422 administrador_invalido |
+| PATCH | /canchas/{id} | 200 cancha actualizada | 400 id_invalido · 400 cuerpo_malformado · 404 no_encontrado · 422 tipo_invalido |
+| POST | /reservas | 201 reserva creada, en estado `pendiente` | 400 cuerpo_malformado · 422 datos_invalidos · 422 cancha_invalida · 422 cliente_invalido · 409 horario_ocupado |
+| GET | /reservas | 200 lista (con `?estado=` y `?cliente_id=`) | 500 error_base |
+| PATCH | /reservas/{id}/estado | 200 reserva con su nuevo estado | 400 id_invalido · 400 cuerpo_malformado · 422 estado_invalido · 404 no_encontrado · 400 transicion_invalida |
+| * | ruta inexistente | — | 404 ruta_inexistente |
+| * | método no soportado | — | 405 metodo_no_permitido |
+
+## Declaración de IA
+
+Usamos Claude (Anthropic) para redactar el esqueleto completo del servidor (paquetes `respuesta`, `middleware`, `config`, `usuarios`, `canchas`, `reservas`, `main.go` y las pruebas), siguiendo la estructura enseñada en los talleres de las semanas 2 a 4, adaptada a nuestro negocio. Las reglas de negocio (seña del 30 %, máquina de estados, validaciones propias) fueron decisiones nuestras, discutidas antes de escribir el código.

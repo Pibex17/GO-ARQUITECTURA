@@ -1,7 +1,6 @@
-*.exe
-*.out
-bin/
+# Secretos de esta máquina: nunca se suben.
 .env
-.env.*
-.DS_Store
-*.log
+.env.atras
+# Binarios compilados.
+*.exe
+canchas-sinteticas
