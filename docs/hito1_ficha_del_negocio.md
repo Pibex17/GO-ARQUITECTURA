@@ -100,7 +100,7 @@ Caso: https://medium.com/@j.ignacioarroyo/aprendizajes-de-fundir-mi-primer-empre
 
 ### Los structs en Go
 
-\`\`\`go
+```go
 package models
 
 import "time"
@@ -230,11 +230,11 @@ type Pago struct {
 	Estado         EstadoPago `gorm:"type:varchar(15);not null;default:pendiente" json:"estado"`
 	PagadoEn       *time.Time `json:"pagado_en,omitempty"`
 }
-\`\`\`
+```
 
 ### Diagrama del modelo
 
-\`\`\`mermaid
+```mermaid
 erDiagram
     USUARIO ||--o{ CANCHA : administra
     USUARIO ||--o{ RESERVA : reserva
@@ -273,7 +273,7 @@ erDiagram
         decimal monto
         string estado
     }
-\`\`\`
+```
 
 **Decisión de tipos:** `HoraInicio` y `HoraFin` (en `Horario` y en `Reserva`) son `string` en formato `"HH:MM"` y no `time.Time`, porque representan solo una hora del día dentro de una plantilla semanal o de una reserva puntual — usar `time.Time` obligaría a inventar una fecha arbitraria para cada hora y complicaría las comparaciones sin aportar nada. En cambio `ComprobanteURL` y `PagadoEn` en `Pago` sí son punteros (`*string`, `*time.Time`), porque mientras el pago está `pendiente` esos datos legítimamente no existen todavía — un puntero nulo distingue "no llegó comprobante" de "comprobante vacío", cosa que un `string` normal no puede hacer.
 
@@ -302,7 +302,7 @@ erDiagram
 
 ### Diagrama de estados
 
-\`\`\`mermaid
+```mermaid
 stateDiagram-v2
     [*] --> pendiente
     pendiente --> pago_por_verificar: cliente sube comprobante de seña
@@ -313,7 +313,7 @@ stateDiagram-v2
     confirmada --> cancelada: cancelación con anticipación
     jugada --> [*]
     cancelada --> [*]
-\`\`\`
+```
 
 **Transición prohibida:** de **jugada** no se vuelve a **cancelada** ni a ningún otro estado. Si hubiera un reclamo después de jugado el partido (por ejemplo, la cancha estaba en mal estado), se maneja como un reembolso o una nota aparte, pero la reserva original queda como jugada — de lo contrario, las estadísticas de ocupación de la cancha y el historial de pagos quedarían falseados, y un administrador podría "deshacer" una reserva ya disfrutada para devolver dinero indebidamente.
 
