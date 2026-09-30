@@ -73,7 +73,7 @@
 ```mermaid
 sequenceDiagram
     participant C as Cliente
-    participant P as Pantalla "Nueva reserva"
+    participant P as Pantalla Nueva reserva
     participant A as API
     participant B as Base de datos
 
