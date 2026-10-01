@@ -1,4 +1,4 @@
-# Sistema de reservas de canchas de fútbol sintéticas
+# Sistema de reservas de canchas de fútbol sintéticas y organización de partidos.
 
 Servidor HTTP en Go (Chi + GORM/PostgreSQL) para el Hito 1 de Aplicaciones Web II.
 
