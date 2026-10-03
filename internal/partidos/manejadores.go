@@ -109,7 +109,7 @@ func (m *Manejador) obtener(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var inscripciones int64
-	m.DB.Model(&inscripcion{}).Where("partido_id = ?", partido.ID).Count(&inscripciones)
+	m.DB.Model(&inscripcion.Inscripcion{}).Where("partido_id = ?", partido.ID).Count(&inscripciones)
 
 	respuesta.Exito(w, http.StatusOK, map[string]any{
 		"partido":        partido,
