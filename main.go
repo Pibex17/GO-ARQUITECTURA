@@ -12,7 +12,9 @@ import (
 
 	"canchas-sinteticas/internal/canchas"
 	"canchas-sinteticas/internal/config"
+	"canchas-sinteticas/internal/inscripcion"
 	"canchas-sinteticas/internal/middleware"
+	"canchas-sinteticas/internal/partidos"
 	"canchas-sinteticas/internal/reservas"
 	"canchas-sinteticas/internal/respuesta"
 	"canchas-sinteticas/internal/usuarios"
@@ -55,6 +57,7 @@ func main() {
 	if *reset {
 		// primero las tablas del lado de los muchos, después las del uno
 		db.Migrator().DropTable(
+			&inscripcion.Inscripcion{}, &partidos.Partido{},
 			&reservas.Pago{}, &reservas.Reserva{},
 			&canchas.Horario{}, &canchas.Cancha{},
 			&usuarios.Usuario{},
@@ -66,6 +69,8 @@ func main() {
 		&usuarios.Usuario{},
 		&canchas.Cancha{}, &canchas.Horario{},
 		&reservas.Reserva{}, &reservas.Pago{},
+		&partidos.Partido{},
+		&inscripcion.Inscripcion{},
 	)
 	if err != nil {
 		log.Fatal("no se pudo migrar: ", err)
@@ -75,6 +80,8 @@ func main() {
 	usuarios.Sembrar(db)
 	canchas.Sembrar(db, 1) // ID 1: el administrador sembrado arriba
 	reservas.Sembrar(db, 1, 2) // Cancha 1, Usuario cliente 2
+	partidos.Sembrar(db, 2) // Reserva 2: la reserva confirmada
+	inscripcion.Sembrar(db, 1) // Partido 1
 
 	// 5. Enrutador y middleware propios (semana 2).
 	r := chi.NewRouter()
@@ -91,6 +98,8 @@ func main() {
 
 	(&canchas.Manejador{DB: db}).Rutas(r)
 	(&reservas.Manejador{DB: db}).Rutas(r)
+	(&partidos.Manejador{DB: db}).Rutas(r)
+	(&inscripcion.Manejador{DB: db}).Rutas(r)
 
 	// 6. Servidor: el puerto y el tiempo de espera se leen una sola vez, de config.
 	servidor := &http.Server{
