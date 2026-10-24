@@ -2,6 +2,24 @@
 
 Servidor HTTP en Go (Chi + GORM/PostgreSQL) para el Hito 1 de Aplicaciones Web II.
 
+## Arranque rápido (Windows)
+
+Doble clic en **`iniciar.bat`**. El script hace todo solo:
+
+1. Levanta PostgreSQL en Docker (`docker compose up -d db`).
+2. Espera a que la base acepte conexiones.
+3. Compila y arranca el servidor en <http://localhost:8080>.
+
+Deje la ventana abierta mientras usa el servidor; `Ctrl+C` lo detiene. Para apagar también la base, doble clic en **`detener.bat`** (los datos se conservan).
+
+Si necesita recrear las tablas y los datos de ejemplo:
+
+```bat
+iniciar.bat reset
+```
+
+Requisitos: Docker Desktop iniciado y Go instalado.
+
 ## Cómo arrancar
 
 ```bash
@@ -47,6 +65,8 @@ go test ./... -v
 .
 ├── main.go                     # conexión, AutoMigrate, semillas, rutas
 ├── go.mod / go.sum
+├── iniciar.bat                  # arranque rápido en Windows (base + servidor)
+├── detener.bat                  # apaga la base de datos
 ├── .env.example                 # sí se sube
 ├── .env                          # NO se sube (está en .gitignore)
 ├── .github/workflows/pruebas.yml
