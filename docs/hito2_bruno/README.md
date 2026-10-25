@@ -1,168 +1,206 @@
 # Colección Bruno · Hito 2
 
-Colección importable para demostrar `401`, `200` de login, `200` de consulta,
-`403` por rol, `200` de la misma operación autorizada y `422` por transición
-inválida. Usa las rutas y la envoltura reales de `docs/openapi.yaml`.
+Colección importable para demostrar la autenticación JWT, el control de acceso por roles y la validación de transiciones de estado de la API. Utiliza las rutas y la estructura de respuestas definidas en `docs/openapi.yaml`.
 
-> **Estado de esta entrega:** la colección está preparada y revisada
-> estáticamente. **Las peticiones todavía no se ejecutaron** contra PostgreSQL
-> real. No se creó `docs/hito2_capturas/` ni se generaron capturas.
+**Estado:** la colección está preparada y revisada estáticamente. La auditoría reportó pruebas Go satisfactorias y peticiones HTTP equivalentes contra un servidor conectado a PostgreSQL. La ejecución completa desde la aplicación Bruno debe confirmarse por separado.
 
-## Estructura
+## 1. Estructura
 
 ```text
 docs/hito2_bruno/
-├── bruno.json
-├── collection.bru
-├── README.md
 ├── 0 - Preparacion - login admin.bru
 ├── 1 - Sin token - 401.bru
 ├── 2 - Login cliente - 200.bru
 ├── 3 - Consultar reservas - 200.bru
 ├── 4 - PATCH cancha como cliente - 403.bru
 ├── 5 - PATCH cancha como admin - 200.bru
-└── 6 - Transicion invalida - 422.bru
+├── 6 - Transicion invalida - 422.bru
+├── bruno.json
+├── collection.bru
+├── README.md
+└── hito2_capturas/
+    ├── 0-preparacion.png
+    ├── 1-sintoken.png
+    ├── 2-logincliente.png
+    ├── 3-consultarReservas.png
+    ├── 4-canchacomocliente.png
+    ├── 5-canchacomoadmin.png
+    ├── 6-transicioninvalida.png
+    └── test.png
 ```
 
-La colección se importa en Bruno con **Import Collection → Bruno Collection** y
-se selecciona esta carpeta. No requiere un entorno activo: las variables están
-en `collection.bru`.
+Para importar la colección, abre Bruno y selecciona **Import Collection → Bruno Collection**. Selecciona la carpeta `docs/hito2_bruno/`.
 
-## Variables
+## 2. Variables
 
 | Variable | Origen | Uso |
 |---|---|---|
-| `baseUrl` | `collection.bru` | `http://127.0.0.1:8080` |
-| `adminToken` | Script de la petición 0 | JWT de `luis` |
-| `clienteToken` | Script de la petición 2 | JWT de `ana` |
-| `reservaId` | Script de la petición 3, o asignación manual verificada | Reserva `pendiente` para la petición 6 |
-| `canchaId` | Script de la petición 3, o asignación manual verificada | Cancha de `luis` para las peticiones 4 y 5 |
+| `baseUrl` | `collection.bru` | Dirección base del servidor, normalmente `http://127.0.0.1:8080`. |
+| `adminToken` | Petición 0 | Token de autenticación del administrador `luis`. |
+| `clienteToken` | Petición 2 | Token de autenticación del cliente `ana`. |
+| `reservaId` | Petición 3 o asignación manual verificada | Reserva pendiente utilizada en la petición 6. |
+| `canchaId` | Petición 3 o asignación manual verificada | Cancha del administrador utilizada en las peticiones 4 y 5. |
 
-Los tokens y los IDs que obtienen los scripts son **variables de runtime**: no
-se escriben en archivos versionados y se pierden al cerrar Bruno. `reservaId` y
-`canchaId` **no tienen valor por defecto**: la petición 3 los limpia y solo los
-completa si encuentra una reserva `pendiente` de `ana`. Si no la encuentra,
-quedan vacíos y las peticiones 4–6 fallan sin modificar datos. No hay tokens
-reales guardados en la colección.
+Los tokens y los identificadores se gestionan mediante las variables y los scripts de la colección. Comprueba que los scripts funcionan con la versión de Bruno instalada.
 
-### Si el script no funciona
+No asumas que los identificadores son válidos solo porque tengan un valor. Antes de ejecutar las peticiones 4, 5 y 6, verifica que correspondan a los registros requeridos.
 
-La estructura se validó con el parser oficial `@usebruno/lang` 0.41.0 y los
-scripts se contrastaron con la documentación oficial de Bruno (`bru.setVar` y
-`script:post-response`). No hay una instalación local de la aplicación Bruno ni
-una colección previa en el repositorio para ejecutarla con el programa real. Si
-la versión instalada no ejecuta los scripts:
+## 3. Usuarios de prueba
 
-1. Ejecute la petición 0 y copie `datos.token` de la respuesta en la variable de
-   colección `adminToken` (Collection Settings → Variables).
-2. Ejecute la petición 2 y copie `datos.token` en `clienteToken`.
-3. Ejecute la petición 3; si no se actualizaron solos, copie el `ID` y el
-   `CanchaID` de una misma reserva con `"Estado": "pendiente"` en `reservaId` y
-   `canchaId`. No asigne esos valores sin comprobar antes el estado y que la
-   cancha pertenece a `luis`.
-4. Como alternativa, pegue el token directamente después de `Bearer ` en la
-   cabecera de cada petición, sin guardar el cambio.
+Las cuentas de ejemplo son:
 
-## Precondiciones
+| Usuario | Clave de prueba | Rol |
+|---|---|---|
+| `ana` | `ana-2026` | `cliente` |
+| `luis` | `luis-2026` | `administrador` |
 
-1. El servidor debe estar levantado en `baseUrl` con PostgreSQL configurado y la
-   migración aplicada. Esta colección no levanta ni borra bases.
-2. La siembra debe haber creado los usuarios de negocio y las cuentas:
-   - `usuarios.Sembrar` solo actúa con la tabla `usuarios` vacía.
-   - `sesion.Sembrar` crea o actualiza `ana` / `ana-2026` (`cliente`) y
-     `luis` / `luis-2026` (`administrador`) y las vincula al primer usuario de
-     cada rol.
-   - `canchas.Sembrar`, `reservas.Sembrar`, `partidos.Sembrar` e
-     `inscripcion.Sembrar` completan los datos de ejemplo.
-3. En una base limpia, la petición 3 obtiene `canchaId = 1` y `reservaId = 1`:
-   la reserva 1 está `pendiente` y la cancha 1 pertenece a `luis`. La reserva 2
-   está `confirmada` y ya tiene el partido 1. Las variables no traen esos IDs
-   por defecto.
-4. Si la base ya tenía datos, verifique que `canchaId` sea una cancha de `luis`
-   y que `reservaId` sea una reserva `pendiente` de una cancha de `luis`. No
-   suponga que los IDs siguen siendo 1.
-5. Las cuentas solo funcionan si están vinculadas. Un `403 cuenta_sin_vinculo`
-   indica un problema de siembra, no de la colección.
+Las cuentas dependen de la siembra de datos del proyecto y de sus vínculos con los usuarios de negocio.
 
-### Verificación no destructiva
+- `usuarios.Sembrar` actúa cuando la tabla de usuarios está vacía.
+- `sesion.Sembrar` crea o actualiza las cuentas de prueba y las vincula con los usuarios de negocio correspondientes.
+- Las funciones de siembra de canchas, reservas, partidos e inscripciones completan los datos de ejemplo.
 
-- La petición 3 (`GET /reservas` con `clienteToken`) es la comprobación principal:
-  no modifica nada, limpia los IDs anteriores y solo los completa si encuentra
-  una reserva `pendiente` de `ana`. Si no hay ninguna, los deja vacíos; las
-  peticiones 4–6 fallan de forma segura y se deben detener hasta asignar datos
-  verificados. La petición 6 necesita una reserva `pendiente` para producir el
-  `422` esperado.
-- La petición 3 no puede comprobar con el token de `ana` que la cancha sea de
-  `luis`. Para confirmarlo, haga un `GET /canchas` con `adminToken` (petición ad
-  hoc, fuera de las seis): el administrador solo ve sus propias canchas. El
-  `CanchaID` de la reserva elegida debe estar entre esos `ID`. Si no está, no
-  reemplace solo `canchaId`: busque otra reserva `pendiente` de `ana` en una
-  cancha de `luis` y asigne `reservaId` y `canchaId` desde esa misma reserva, o
-  deténgase.
-- La petición 5 usa `PATCH` con cuerpo `{}`. El manejador conserva todos los
-  campos existentes y guarda la misma cancha: no cambia nombre, tipo, dirección,
-  precio ni estado. No se debe enviar un cuerpo con cambios para esta demo.
-- La petición 6 pide `confirmada` desde una reserva `pendiente`. Esa transición
-  no está en la máquina de estados (`pendiente → pago_por_verificar | cancelada`),
-  así que el servidor responde `422` antes de guardar. Si la reserva ya está en
-  `pago_por_verificar`, `confirmada` sí sería válida; en ese caso elija otra
-  reserva `pendiente` o cambie el objetivo a un estado sin transición desde el
-  estado actual.
-- No ejecute la petición 6 si `reservaId` está vacío. Tampoco la ejecute con un
-  ID manual sin comprobar antes, con `GET /reservas/{id}` y el token de `luis`,
-  que la reserva está `pendiente` y pertenece a una cancha suya.
-- No use `go run . -reset` para preparar esta demostración: borra las tablas.
+Si aparece `403 cuenta_sin_vinculo`, revisa la siembra y los vínculos entre las cuentas y los usuarios de negocio.
 
-## Orden y resultados esperados
+## 4. Precondiciones
 
-| # | Petición | Resultado esperado | Cuerpo de error esperado |
+Antes de ejecutar la colección:
+
+1. El servidor debe estar levantado en la dirección indicada por `baseUrl`.
+2. PostgreSQL debe estar disponible y la migración del proyecto debe haberse aplicado.
+3. Las cuentas de prueba deben existir y estar correctamente vinculadas.
+4. Debe existir una cancha de `luis` y una reserva en estado `pendiente` asociada a esa cancha.
+5. Los identificadores deben verificarse contra los datos actuales. No asumas que siguen siendo `1`.
+
+En la base de prueba limpia descrita durante la auditoría se reportaron la cancha `1` y la reserva `1` como registros adecuados para la demostración. En una base con datos previos, comprueba los identificadores antes de utilizarlos.
+
+**No ejecutes `go run . -reset` para preparar la demostración**, porque puede borrar las tablas.
+
+## 5. Orden de ejecución y resultados esperados
+
+La petición 0 es una preparación para obtener el token del administrador. Las seis peticiones restantes son los escenarios principales.
+
+| N.º | Petición | Resultado esperado | Finalidad |
 |---|---|---|---|
-| 0 | Login de `luis` | `200` | — |
-| 1 | `GET /reservas` sin token | `401` | `falta_token` |
-| 2 | Login de `ana` | `200` | — |
-| 3 | `GET /reservas` con `clienteToken` | `200` | — |
-| 4 | `PATCH /canchas/{{canchaId}}` con `clienteToken` y `{}` | `403` | `permiso_denegado` |
-| 5 | `PATCH /canchas/{{canchaId}}` con `adminToken` y `{}` | `200` | — |
-| 6 | `PATCH /reservas/{{reservaId}}/estado` con `adminToken` y `{"NuevoEstado":"confirmada"}` | `422` | `transicion_invalida` |
+| 0 | Login de `luis` | `200` | Obtener el token del administrador. |
+| 1 | `GET /reservas` sin token | `401` | Comprobar la autenticación obligatoria. |
+| 2 | Login de `ana` | `200` | Obtener el token del cliente. |
+| 3 | `GET /reservas` con `clienteToken` | `200` | Consultar las reservas del cliente. |
+| 4 | `PATCH /canchas/{{canchaId}}` con `clienteToken` y `{}` | `403` | Comprobar la restricción por rol. |
+| 5 | `PATCH /canchas/{{canchaId}}` con `adminToken` y `{}` | `200` | Comprobar la operación autorizada. |
+| 6 | `PATCH /reservas/{{reservaId}}/estado` con `adminToken` y `{"NuevoEstado":"confirmada"}` | `422` | Comprobar el rechazo de una transición inválida. |
 
-Envoltura real: éxito `{"ok":true,"datos":...}`; error
-`{"ok":false,"error":{"codigo":"...","mensaje":"..."}}`.
+Códigos de error esperados:
 
-## Ejecución
+- Petición 1: `401`, código `falta_token`.
+- Petición 4: `403`, código `permiso_denegado`.
+- Petición 6: `422`, código `transicion_invalida`.
 
-1. Importe la carpeta en Bruno.
-2. Ejecute la petición **0**. Debe guardar `adminToken`.
-3. Ejecute **1**: sin `Authorization` debe dar `401 falta_token`.
-4. Ejecute **2**: debe guardar `clienteToken`.
-5. Ejecute **3**: debe listar las reservas de `ana` y actualizar `reservaId` /
-   `canchaId` si encuentra una pendiente.
-6. Ejecute **4**: con el rol cliente debe dar `403 permiso_denegado`.
-7. Ejecute **5**: con el rol administrador y cuerpo `{}` debe dar `200`.
-8. Ejecute **6**: debe dar `422 transicion_invalida`.
+La estructura general de las respuestas es:
 
-También se pueden ejecutar las siete con el Collection Runner; el campo `seq`
-las mantiene en ese orden. Si el token vence (una hora), repita 0 y 2.
+**Respuesta exitosa:**
 
-## Capturas previstas (no creadas todavía)
+```json
+{
+  "ok": true,
+  "datos": {}
+}
+```
 
-Cuando exista una base PostgreSQL real y las peticiones se hayan ejecutado:
+**Respuesta de error:**
 
-1. Capturar la petición 1 con el estado `401` y el cuerpo `falta_token`.
-2. Capturar la petición 2 con el estado `200` (sin mostrar el JWT completo).
-3. Capturar la petición 3 con el estado `200` y las reservas de `ana`.
-4. Capturar la petición 4 con el estado `403` y el cuerpo `permiso_denegado`.
-5. Capturar la petición 5 con el estado `200` y el cuerpo de la cancha.
-6. Capturar la petición 6 con el estado `422` y el cuerpo `transicion_invalida`.
+```json
+{
+  "ok": false,
+  "error": {
+    "codigo": "codigo_del_error",
+    "mensaje": "Descripción del error"
+  }
+}
+```
 
-En las capturas conviene ocultar o sustituir el valor de `Authorization` por
-`Bearer •••`; no se deben publicar tokens. Guardar las imágenes en
-`docs/hito2_capturas/` solo después de ejecutar y comprobar los resultados
-reales. No se debe presentar una captura simulada como evidencia.
+Los cuerpos anteriores representan la estructura esperada; los datos concretos dependen de la respuesta real del servidor.
 
-## Pendiente de PostgreSQL
+## 6. Verificación de los identificadores
 
-Esta colección no demuestra por sí sola que PostgreSQL esté integrado: los
-manejadores y la siembra están implementados, pero la ejecución real de las seis
-peticiones contra una base levantada **sigue pendiente**. Las pruebas Go
-existentes usan dobles para las dependencias de base; no sustituyen esta
-comprobación de integración.
+La petición 3 consulta las reservas de `ana`. Si el script correspondiente está configurado y funciona correctamente, puede obtener los identificadores de una reserva pendiente.
+
+Antes de ejecutar las peticiones 4, 5 y 6:
+
+1. Comprueba que `reservaId` identifica una reserva cuyo estado actual sea `pendiente`.
+2. Comprueba que el `CanchaID` de esa reserva corresponda a una cancha de `luis`.
+3. Utiliza el mismo `CanchaID` como valor de `canchaId`.
+4. Si no existe una reserva que cumpla ambas condiciones, detén la secuencia hasta seleccionar o preparar datos válidos.
+
+La petición 3 utiliza el token de `ana`, por lo que no demuestra por sí sola que la cancha pertenezca a `luis`. Para comprobarlo, consulta `GET /canchas` con `adminToken` y verifica que la cancha aparezca entre los registros del administrador.
+
+No ejecutes la petición 6 con un identificador vacío o sin verificar el estado de la reserva.
+
+## 7. Consideraciones sobre las peticiones 5 y 6
+
+### Petición 5: modificación autorizada de cancha
+
+La petición utiliza el cuerpo `{}`. Según el comportamiento descrito para el manejador, la operación debe conservar los campos existentes de la cancha.
+
+Después de ejecutarla, comprueba que no hayan cambiado el nombre, tipo, dirección, precio ni estado. No envíes un cuerpo con cambios para esta demostración.
+
+### Petición 6: transición inválida
+
+La petición intenta cambiar una reserva de `pendiente` a `confirmada`.
+
+Según la máquina de estados documentada, esa transición debe rechazarse con `422 transicion_invalida`. Si la reserva ya se encuentra en otro estado, selecciona una reserva válida antes de ejecutar la petición.
+
+## 8. Capturas y evidencias
+
+Las capturas se encuentran en:
+
+`docs/hito2_bruno/hito2_capturas/`
+
+| Archivo | Escenario que debe documentar |
+|---|---|
+| `0-preparacion.png` | Preparación o login del administrador. |
+| `1-sintoken.png` | Respuesta `401` sin token. |
+| `2-logincliente.png` | Login del cliente con respuesta `200`. |
+| `3-consultarReservas.png` | Consulta de reservas con respuesta `200`. |
+| `4-canchacomocliente.png` | Respuesta `403` al intentar modificar una cancha como cliente. |
+| `5-canchacomoadmin.png` | Respuesta `200` al ejecutar la operación como administrador. |
+| `6-transicioninvalida.png` | Respuesta `422` por transición inválida. |
+| `test.png` | Pendiente de revisar y clasificar. |
+
+Antes de presentar las capturas como evidencia definitiva:
+
+- Verifica visualmente que cada imagen corresponda a la petición indicada.
+- Confirma el código HTTP y el cuerpo de respuesta.
+- Comprueba que no aparezcan tokens JWT completos ni credenciales.
+- Revisa `test.png` para determinar si aporta evidencia adicional.
+- No presentes una captura simulada como resultado de una prueba real.
+
+La existencia de las imágenes no demuestra por sí sola que la colección completa se haya ejecutado desde Bruno.
+
+## 9. Validación técnica
+
+Durante la auditoría se reportaron los siguientes comandos con resultado satisfactorio:
+
+```bash
+go test ./... -count=1
+go build ./...
+go vet ./...
+go mod verify
+```
+
+También se reportó que `docs/openapi.yaml` pasó la validación de Redocly sin errores ni advertencias.
+
+Las pruebas Go existentes utilizan dobles para las dependencias de base de datos. Por tanto, no sustituyen una prueba de integración automatizada contra PostgreSQL.
+
+La auditoría reportó peticiones HTTP equivalentes contra un servidor conectado a PostgreSQL aislado. La ejecución completa desde Bruno debe registrarse por separado si es un requisito de la entrega.
+
+## 10. Estado de la entrega
+
+Al finalizar el Hito 2, registra por separado:
+
+- **Colección preparada:** rutas, cuerpos y orden revisados.
+- **Pruebas Go:** resultado de la última ejecución.
+- **Integración HTTP/PostgreSQL:** escenarios que se ejecutaron realmente.
+- **Ejecución desde Bruno:** confirmar si se ejecutaron las seis peticiones principales desde la aplicación.
+- **Evidencias:** capturas verificadas y asociadas a cada escenario.
+

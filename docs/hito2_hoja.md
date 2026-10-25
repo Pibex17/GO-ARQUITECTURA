@@ -49,6 +49,3 @@ Las 11 operaciones de `docs/openapi.yaml`. `401` aplica a toda ruta protegida si
 
 ## 4. Cumplimiento del Hito 2
 
-> **Cubierto y verificable:** login JWT con dos roles (0 y 2); `401 falta_token` sin token (1); consulta autenticada `200` (3); `403 permiso_denegado` por rol (4); misma operación autorizada `200` con cuerpo `{}` (5); `422 transicion_invalida` sin cambios (6); contrato de 11 operaciones validado con Redocly; envoltura real `{"ok":true,"datos":...}` / `{"ok":false,"error":{"codigo":"...","mensaje":"..."}}`; pruebas Go, build, vet y módulos correctos.
->
-> **Pendiente:** ejecución de las seis peticiones contra PostgreSQL real. Esta hoja y la colección dejan los pasos; no se afirma que se hayan ejecutado ni se crearon capturas (`docs/hito2_capturas/` no existe todavía).
