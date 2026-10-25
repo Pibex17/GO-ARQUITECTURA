@@ -17,6 +17,7 @@ import (
 	"canchas-sinteticas/internal/partidos"
 	"canchas-sinteticas/internal/reservas"
 	"canchas-sinteticas/internal/respuesta"
+	"canchas-sinteticas/internal/sesion"
 	"canchas-sinteticas/internal/usuarios"
 )
 
@@ -57,6 +58,7 @@ func main() {
 	if *reset {
 		// primero las tablas del lado de los muchos, después las del uno
 		db.Migrator().DropTable(
+			&sesion.Cuenta{},
 			&inscripcion.Inscripcion{}, &partidos.Partido{},
 			&reservas.Pago{}, &reservas.Reserva{},
 			&canchas.Horario{}, &canchas.Cancha{},
@@ -71,6 +73,7 @@ func main() {
 		&reservas.Reserva{}, &reservas.Pago{},
 		&partidos.Partido{},
 		&inscripcion.Inscripcion{},
+		&sesion.Cuenta{},
 	)
 	if err != nil {
 		log.Fatal("no se pudo migrar: ", err)
@@ -78,9 +81,13 @@ func main() {
 
 	// 4. Sembrar datos de ejemplo (solo si las tablas están vacías).
 	usuarios.Sembrar(db)
-	canchas.Sembrar(db, 1) // ID 1: el administrador sembrado arriba
+	// Las cuentas se siembran después: buscan su usuario de negocio por rol.
+	if err := sesion.Sembrar(db); err != nil {
+		log.Fatal("no se pudieron sembrar las cuentas: ", err)
+	}
+	canchas.Sembrar(db, 1)     // ID 1: el administrador sembrado arriba
 	reservas.Sembrar(db, 1, 2) // Cancha 1, Usuario cliente 2
-	partidos.Sembrar(db, 2) // Reserva 2: la reserva confirmada
+	partidos.Sembrar(db, 2)    // Reserva 2: la reserva confirmada
 	inscripcion.Sembrar(db, 1) // Partido 1
 
 	// 5. Enrutador y middleware propios (semana 2).
@@ -96,10 +103,21 @@ func main() {
 			"metodo_no_permitido", "el método no está permitido en esta ruta")
 	})
 
-	(&canchas.Manejador{DB: db}).Rutas(r)
-	(&reservas.Manejador{DB: db}).Rutas(r)
-	(&partidos.Manejador{DB: db}).Rutas(r)
-	(&inscripcion.Manejador{DB: db}).Rutas(r)
+	// El guardia de sesión se crea antes de registrar las rutas de negocio:
+	// todas lo reciben y deciden su nivel (sesión, solo cliente o solo
+	// administrador). POST /login se registra aparte, sin guardia.
+	tokens := sesion.NuevosTokens(cfg.ClaveFirma)
+
+	(&canchas.Manejador{DB: db}).Rutas(r, tokens)
+	(&reservas.Manejador{DB: db}).Rutas(r, tokens)
+	(&partidos.Manejador{DB: db}).Rutas(r, tokens)
+	(&inscripcion.Manejador{DB: db}).Rutas(r, tokens)
+
+	// Sesión: POST /login es la única ruta pública.
+	(&sesion.Manejador{
+		Cuentas: sesion.RepositorioCuentasGORM{DB: db},
+		Tokens:  tokens,
+	}).Rutas(r)
 
 	// 6. Servidor: el puerto y el tiempo de espera se leen una sola vez, de config.
 	servidor := &http.Server{

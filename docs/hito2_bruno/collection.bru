@@ -1,0 +1,29 @@
+vars:pre-request {
+  @description('''URL del servidor local. La colección usa la misma base que docs/openapi.yaml.''')
+  baseUrl: http://127.0.0.1:8080
+
+  @description('''JWT del administrador. La petición 0 lo escribe en runtime; si el script no corre, asígnelo a mano.''')
+  adminToken:
+
+  @description('''JWT del cliente. La petición 2 lo escribe en runtime; si el script no corre, asígnelo a mano.''')
+  clienteToken:
+
+  @description('''Reserva pendiente que usa la petición 6. La petición 3 lo escribe; sin valor por defecto.''')
+  reservaId:
+
+  @description('''Cancha de luis que usan las peticiones 4 y 5. La petición 3 lo escribe; sin valor por defecto.''')
+  canchaId:
+}
+
+docs {
+  # ServA · Hito 2
+
+  Colección de demostración de autenticación, roles, propiedad y transición inválida.
+
+  Ejecute las peticiones en orden: 0 (preparación), 1 a 6. Los tokens quedan en
+  variables de runtime y no se guardan en el repositorio. No escriba tokens reales
+  en este archivo. Las credenciales de `ana` y `luis` son ficticias y dependen de
+  la siembra del servidor.
+
+  Consulte `README.md` para las precondiciones y el respaldo manual.
+}

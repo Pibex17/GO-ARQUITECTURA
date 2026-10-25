@@ -1,0 +1,28 @@
+meta {
+  name: 5 - PATCH cancha como admin - 200
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/canchas/{{canchaId}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{adminToken}}
+  Content-Type: application/json
+}
+
+body:json {
+  {}
+}
+
+tests {
+  test("5 - el administrador obtiene 200 con el cuerpo vacio", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.ok).to.equal(true);
+    expect(res.body.datos).to.be.an("object");
+  });
+}

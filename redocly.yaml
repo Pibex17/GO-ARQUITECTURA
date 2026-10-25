@@ -1,0 +1,8 @@
+# Configuracion de Redocly CLI para el Hito 2.
+# El enunciado oficial exige la regla security-defined encendida
+# (sin configurarla como "off"). El resto usa el conjunto recomendado.
+extends:
+  - recommended
+
+rules:
+  security-defined: error

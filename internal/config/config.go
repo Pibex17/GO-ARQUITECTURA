@@ -14,6 +14,7 @@ import (
 // Config es todo lo que el servidor necesita saber del entorno donde corre.
 type Config struct {
 	DatabaseURL  string        // secreto: lleva la contraseña. Sin valor por defecto.
+	ClaveFirma   string        // secreto: firma los tokens. Sin valor por defecto.
 	Puerto       string        // configuración: cambia por máquina. Por defecto 8080.
 	TiempoEspera time.Duration // configuración: cuánto se espera antes de cortar. Por defecto 5s.
 }
@@ -31,6 +32,12 @@ func Cargar() (Config, error) {
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("falta DATABASE_URL " +
 			"(copie .env.example a .env y complete la contraseña)")
+	}
+
+	c.ClaveFirma = os.Getenv("CLAVE_FIRMA")
+	if c.ClaveFirma == "" {
+		return c, fmt.Errorf("falta CLAVE_FIRMA " +
+			"(copie .env.example a .env y defina un secreto largo e inventado)")
 	}
 
 	c.Puerto = os.Getenv("PUERTO")

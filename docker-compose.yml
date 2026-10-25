@@ -31,6 +31,9 @@ services:
       # en su máquina) sigue siendo "localhost", por eso este valor va
       # aquí y no en el .env que usan para correr sin Docker.
       DATABASE_URL: host=db user=postgres password=postgres dbname=canchas port=5432
+      # Secreto: se toma del entorno de quien ejecuta Docker (o de su .env
+      # local). No se escribe aquí un valor real.
+      CLAVE_FIRMA: ${CLAVE_FIRMA}
       PUERTO: 8080
       TIEMPO_ESPERA_SEGUNDOS: 5
     ports:

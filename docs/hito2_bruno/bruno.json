@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "ServA · Hito 2",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

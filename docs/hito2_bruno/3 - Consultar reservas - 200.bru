@@ -1,0 +1,44 @@
+meta {
+  name: 3 - Consultar reservas - 200
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/reservas
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{clienteToken}}
+}
+
+script:post-response {
+  // Se limpian primero para no reutilizar IDs de una ejecución anterior.
+  bru.setVar("reservaId", "");
+  bru.setVar("canchaId", "");
+
+  const lista = (res.body && Array.isArray(res.body.datos)) ? res.body.datos : [];
+  let pendiente = null;
+
+  for (let i = 0; i < lista.length; i++) {
+    if (lista[i].Estado === "pendiente") {
+      pendiente = lista[i];
+      break;
+    }
+  }
+
+  if (pendiente) {
+    bru.setVar("reservaId", pendiente.ID);
+    bru.setVar("canchaId", pendiente.CanchaID);
+  }
+}
+
+tests {
+  test("3 - consulta de reservas responde 200", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.ok).to.equal(true);
+    expect(res.body.datos).to.be.an("array");
+  });
+}

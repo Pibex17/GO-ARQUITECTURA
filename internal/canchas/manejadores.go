@@ -2,6 +2,7 @@ package canchas
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -9,17 +10,40 @@ import (
 	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/respuesta"
-	"canchas-sinteticas/internal/usuarios"
+	"canchas-sinteticas/internal/sesion"
 )
 
-// Manejador guarda la conexión. Todas las rutas la leen con m.DB.
-type Manejador struct{ DB *gorm.DB }
+// Manejador guarda la conexión y las piezas sustituibles por dobles.
+type Manejador struct {
+	DB       *gorm.DB
+	Repo     Repositorio
+	Vinculos sesion.ResolutorVinculos
+}
+
+func (m *Manejador) repositorio() Repositorio {
+	if m.Repo != nil {
+		return m.Repo
+	}
+	return RepositorioGORM{DB: m.DB}
+}
+
+func (m *Manejador) vinculos() sesion.ResolutorVinculos {
+	if m.Vinculos != nil {
+		return m.Vinculos
+	}
+	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
+}
 
 // Rutas registra aquí las rutas de este paquete, para no llenar main.go.
-func (m *Manejador) Rutas(r chi.Router) {
-	r.Get("/canchas", m.listar)
-	r.Post("/canchas", m.crear)
-	r.Patch("/canchas/{id}", m.actualizar)
+// GET /canchas es para cualquier sesión; crear y editar son solo del
+// administrador (ficha Hito 1, secciones 6 y 7).
+func (m *Manejador) Rutas(r chi.Router, tokens *sesion.Tokens) {
+	conSesion := r.With(tokens.Autenticar)
+	soloAdmin := conSesion.With(sesion.SoloRol(sesion.RolAdministrador))
+
+	conSesion.Get("/canchas", m.listar)
+	soloAdmin.Post("/canchas", m.crear)
+	soloAdmin.Patch("/canchas/{id}", m.actualizar)
 }
 
 // leerID saca el id de la URL y lo convierte a número.
@@ -33,50 +57,71 @@ func leerID(w http.ResponseWriter, r *http.Request) (uint, bool) {
 	return uint(n), true
 }
 
+func sesionActual(w http.ResponseWriter, r *http.Request) (sesion.Sesion, bool) {
+	s, ok := sesion.De(r)
+	if !ok {
+		respuesta.Error(w, http.StatusUnauthorized,
+			"falta_token", "falta el token: inicie sesión en POST /login")
+		return sesion.Sesion{}, false
+	}
+	return s, true
+}
+
+func responderSinVinculo(w http.ResponseWriter) {
+	respuesta.Error(w, http.StatusForbidden,
+		"cuenta_sin_vinculo", "la cuenta no está vinculada a un usuario de negocio")
+}
+
 // POST /canchas
 func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
-	// 1. Leer el JSON. Si viene roto, 400 y se sale.
-	var c Cancha
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+	// El cuerpo no incluye AdministradorID: el dueño sale de la sesión.
+	var entrada struct {
+		Nombre     string
+		Tipo       string
+		Direccion  string
+		PrecioHora float64
+	}
+	if err := json.NewDecoder(r.Body).Decode(&entrada); err != nil {
 		respuesta.Error(w, http.StatusBadRequest,
 			"cuerpo_malformado", "el cuerpo debe ser JSON")
 		return
 	}
-	c.ID = 0 // que nadie elija su propio ID
 
-	// 2. Validar.
-	if c.Nombre == "" || c.Direccion == "" {
+	if entrada.Nombre == "" || entrada.Direccion == "" {
 		respuesta.Error(w, http.StatusUnprocessableEntity,
 			"datos_invalidos", "nombre y dirección son obligatorios")
 		return
 	}
-	if c.PrecioHora <= 0 {
+	if entrada.PrecioHora <= 0 {
 		respuesta.Error(w, http.StatusUnprocessableEntity,
 			"datos_invalidos", "el precio por hora debe ser mayor que cero")
 		return
 	}
-	if !tiposValidos[c.Tipo] {
+	if !tiposValidos[entrada.Tipo] {
 		respuesta.Error(w, http.StatusUnprocessableEntity,
 			"tipo_invalido", "el tipo de cancha no es válido")
 		return
 	}
-	// Regla propia de este negocio: el administrador tiene que existir
-	// y tener el rol correcto, antes de guardar la cancha (2b).
-	var admin usuarios.Usuario
-	if err := m.DB.First(&admin, c.AdministradorID).Error; err != nil {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"administrador_invalido", "no existe un usuario con ese administrador_id")
-		return
-	}
-	if admin.Rol != "administrador" {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"administrador_invalido", "ese usuario no tiene rol administrador")
-		return
-	}
-	c.Activa = true // el servidor decide el valor inicial, no quien crea
 
-	// 3. Guardar.
-	if err := m.DB.Debug().Create(&c).Error; err != nil {
+	s, ok := sesionActual(w, r)
+	if !ok {
+		return
+	}
+	usuario, err := m.vinculos().UsuarioDe(s)
+	if err != nil {
+		responderSinVinculo(w)
+		return
+	}
+
+	c := Cancha{
+		Nombre:          entrada.Nombre,
+		Tipo:            entrada.Tipo,
+		Direccion:       entrada.Direccion,
+		PrecioHora:      entrada.PrecioHora,
+		Activa:          true,       // el servidor decide el valor inicial
+		AdministradorID: usuario.ID, // el dueño es la cuenta autenticada
+	}
+	if err := m.repositorio().CrearCancha(&c); err != nil {
 		respuesta.Error(w, http.StatusInternalServerError,
 			"error_base", "no se pudo guardar la cancha")
 		return
@@ -84,21 +129,48 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 	respuesta.Exito(w, http.StatusCreated, c)
 }
 
-// GET /canchas
-// Sin "administrador_id": el catálogo público, solo canchas activas.
-// Con "administrador_id=N": todas las canchas de ese administrador (activas o no).
+// GET /canchas — el cliente solo ve activas; el administrador solo las
+// suyas, activas e inactivas. El query no amplía esos límites.
 func (m *Manejador) listar(w http.ResponseWriter, r *http.Request) {
-	adminID := r.URL.Query().Get("administrador_id")
-
-	consulta := m.DB.Debug().Preload("Horarios")
-	if adminID != "" {
-		consulta = consulta.Where("administrador_id = ?", adminID)
-	} else {
-		consulta = consulta.Where("activa = ?", true)
+	s, ok := sesionActual(w, r)
+	if !ok {
+		return
+	}
+	usuario, err := m.vinculos().UsuarioDe(s)
+	if err != nil {
+		responderSinVinculo(w)
+		return
 	}
 
-	var lista []Cancha
-	if err := consulta.Find(&lista).Error; err != nil {
+	filtro := FiltroCanchas{}
+	switch s.Rol {
+	case sesion.RolCliente:
+		activa := true
+		filtro.Activa = &activa
+
+		// Se conserva el filtro opcional del catálogo, pero siempre dentro
+		// de las canchas activas.
+		if texto := r.URL.Query().Get("administrador_id"); texto != "" {
+			n, err := strconv.Atoi(texto)
+			if err != nil || n <= 0 {
+				respuesta.Error(w, http.StatusBadRequest,
+					"id_invalido", "el administrador_id debe ser un entero positivo")
+				return
+			}
+			administradorID := uint(n)
+			filtro.AdministradorID = &administradorID
+		}
+	case sesion.RolAdministrador:
+		administradorID := usuario.ID
+		filtro.AdministradorID = &administradorID
+	default:
+		respuesta.Error(w, http.StatusForbidden,
+			"permiso_denegado", "su rol no tiene permiso para esta acción")
+		return
+	}
+
+	lista, err := m.repositorio().ListarCanchas(filtro)
+	if err != nil {
 		respuesta.Error(w, http.StatusInternalServerError,
 			"error_base", "no se pudo listar las canchas")
 		return
@@ -120,10 +192,31 @@ func (m *Manejador) actualizar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var existente Cancha
-	if err := m.DB.First(&existente, id).Error; err != nil {
-		respuesta.Error(w, http.StatusNotFound,
-			"no_encontrado", "no existe una cancha con ese id")
+
+	s, ok := sesionActual(w, r)
+	if !ok {
+		return
+	}
+	usuario, err := m.vinculos().UsuarioDe(s)
+	if err != nil {
+		responderSinVinculo(w)
+		return
+	}
+
+	existente, err := m.repositorio().CanchaPorID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respuesta.Error(w, http.StatusNotFound,
+				"no_encontrado", "no existe una cancha con ese id")
+			return
+		}
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", "no se pudo leer la cancha")
+		return
+	}
+	if existente.AdministradorID != usuario.ID {
+		respuesta.Error(w, http.StatusForbidden,
+			"permiso_denegado", "la cancha no es suya")
 		return
 	}
 
@@ -139,8 +232,8 @@ func (m *Manejador) actualizar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Solo estos campos se pueden cambiar (decisión D3 de docs/decisiones.md):
-	// el AdministradorID no se toca desde este endpoint.
+	// Solo estos campos se pueden cambiar: el AdministradorID no se toca
+	// desde este endpoint.
 	if entrada.Nombre != "" {
 		existente.Nombre = entrada.Nombre
 	}
@@ -157,7 +250,7 @@ func (m *Manejador) actualizar(w http.ResponseWriter, r *http.Request) {
 		existente.Activa = *entrada.Activa
 	}
 
-	if err := m.DB.Save(&existente).Error; err != nil {
+	if err := m.repositorio().GuardarCancha(&existente); err != nil {
 		respuesta.Error(w, http.StatusInternalServerError,
 			"error_base", "no se pudo actualizar la cancha")
 		return
