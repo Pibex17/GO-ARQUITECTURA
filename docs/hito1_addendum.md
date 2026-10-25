@@ -42,11 +42,11 @@
 | Variable | Para qué sirve | Ejemplo (sin datos reales) |
 |----------|----------------|----------------------------|
 | `DATABASE_URL` | Cadena de conexión a PostgreSQL. Es un secreto: lleva la contraseña, no tiene valor por defecto y el servidor no arranca sin ella. | `host=localhost user=postgres password=**** dbname=canchas port=5432` |
-| `CLAVE_FIRMA` | Secreto con el que se firman los JWT HS256. No tiene valor por defecto y el servidor no arranca sin ella. | `texto-largo-e-inventado` |
+| `CLAVE_FIRMA` | Secreto con el que se firman los JWT HS256. Debe tener al menos 32 bytes; se rechazan valores vacíos, solo espacios y marcadores de ejemplo. No tiene valor por defecto. | Una clave aleatoria propia (no escriba una real aquí) |
 | `PUERTO` | Puerto donde escucha el servidor HTTP. No es secreto, cambia por máquina. Si se omite, usa `8080`. | `8080` |
 | `TIEMPO_ESPERA_SEGUNDOS` | Segundos que espera el servidor antes de cortar una petición lenta (`ReadTimeout`/`WriteTimeout`). Si se omite, usa `5`. | `5` |
 
-**Archivo de ejemplo:** `.env.example` (en la raíz del repositorio). El `.env` real está en `.gitignore` y nunca se sube. `iniciar.bat` copia `.env.example` si no existe `.env`; el valor `CAMBIE_ESTO` de `CLAVE_FIRMA` es solo un marcador y debe reemplazarse antes de usar la API. Dentro de Docker, `DATABASE_URL` se redefine directamente en `docker-compose.yml` con `host=db` en vez de `host=localhost` (ver `docs/decisiones.md`, decisión D4), y `CLAVE_FIRMA` se toma del entorno o del `.env` que lee Docker Compose.
+**Archivo de ejemplo:** `.env.example` (en la raíz del repositorio). El `.env` real está en `.gitignore` y nunca se sube. `iniciar.bat` copia `.env.example` si no existe `.env`; deje `CLAVE_FIRMA` vacía en la plantilla y genere una clave aleatoria propia de al menos 32 bytes dentro de `.env` antes de usar la API. El servidor rechaza valores vacíos, solo espacios, marcadores de ejemplo (como `CAMBIE_ESTO` o `texto-largo-e-inventado`) y claves de menos de 32 bytes. Dentro de Docker, `DATABASE_URL` se redefine directamente en `docker-compose.yml` con `host=db` en vez de `host=localhost` (ver `docs/decisiones.md`, decisión D4), y `CLAVE_FIRMA` se toma del entorno o del `.env` que lee Docker Compose.
 
 ## C. Pruebas
 

@@ -12,7 +12,7 @@ Doble clic en **`iniciar.bat`**. El script hace todo solo:
 
 Deje la ventana abierta mientras usa el servidor; `Ctrl+C` lo detiene. Para apagar también la base, doble clic en **`detener.bat`** (los datos se conservan).
 
-Si no existe `.env`, `iniciar.bat` lo crea copiando `.env.example`. **Antes de usar la API, cambie `CLAVE_FIRMA` en `.env` por un texto largo e inventado.** El valor `CAMBIE_ESTO` es solo un marcador de posición y el servidor no arranca sin esa variable. No use una clave real en `.env.example` ni en la documentación.
+Si no existe `.env`, `iniciar.bat` lo crea copiando `.env.example`. **Genere una clave aleatoria propia de al menos 32 bytes y péguela en `CLAVE_FIRMA` dentro de `.env`.** El servidor rechaza valores vacíos, compuestos solo por espacios, marcadores como `CAMBIE_ESTO` y claves de menos de 32 bytes. No incluya una clave real en `.env.example` ni en la documentación.
 
 Si necesita recrear las tablas y los datos de ejemplo:
 
@@ -26,7 +26,7 @@ Requisitos: Docker Desktop iniciado y Go instalado.
 
 ```bash
 go mod tidy
-cp .env.example .env        # complete DATABASE_URL y CLAVE_FIRMA
+cp .env.example .env        # complete DATABASE_URL y genere CLAVE_FIRMA (32+ bytes)
 psql -U postgres -c "CREATE DATABASE canchas;"
 go run . -reset             # primera vez: crea las tablas y siembra datos de ejemplo
 ```
@@ -38,7 +38,7 @@ Variables de entorno:
 | Variable | Uso | Valor por defecto |
 | --- | --- | --- |
 | `DATABASE_URL` | Cadena de conexión a PostgreSQL. Incluye la contraseña; es un secreto. | Sin valor por defecto |
-| `CLAVE_FIRMA` | Secreto con el que se firman los JWT HS256. No se escribe en el código. | Sin valor por defecto |
+| `CLAVE_FIRMA` | Secreto con el que se firman los JWT HS256. Mínimo 32 bytes; no se aceptan marcadores de ejemplo. | Sin valor por defecto |
 | `PUERTO` | Puerto HTTP. | `8080` |
 | `TIEMPO_ESPERA_SEGUNDOS` | `ReadTimeout` y `WriteTimeout` del servidor. | `5` |
 
@@ -50,7 +50,7 @@ No hace falta tener Go ni PostgreSQL instalados en la máquina: Docker arma los 
 docker compose up --build
 ```
 
-`docker compose` lee el archivo `.env` de la raíz para sustituir `CLAVE_FIRMA`; defina ahí un valor largo e inventado o páselo en el entorno antes de levantar los contenedores. La primera vez (o si borran el volumen `datos_postgres`), en otra terminal, para crear las tablas y sembrar los datos de ejemplo:
+`docker compose` lee el archivo `.env` de la raíz para sustituir `CLAVE_FIRMA`; defina ahí una clave aleatoria propia de al menos 32 bytes o pásela en el entorno antes de levantar los contenedores. La primera vez (o si borran el volumen `datos_postgres`), en otra terminal, para crear las tablas y sembrar los datos de ejemplo:
 
 ```bash
 docker compose run --rm app -reset

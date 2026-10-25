@@ -3,18 +3,51 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 )
 
+// longitudMinimaClaveFirma exige al menos 32 bytes para la clave HS256.
+// No se valida entropía ni fortaleza criptográfica, solo longitud y marcadores.
+const longitudMinimaClaveFirma = 32
+
+// marcadoresClaveFirma son valores de ejemplo que aparecen en la documentación
+// y que nunca deben usarse para firmar tokens.
+var marcadoresClaveFirma = map[string]struct{}{
+	"cambie_esto":             {},
+	"texto-largo-e-inventado": {},
+}
+
+// validarClaveFirma aplica la política de la clave JWT sin exponer su valor en
+// los errores. La comparación de marcadores ignora mayúsculas y espacios
+// exteriores para evitar que una variante trivial pase la validación.
+func validarClaveFirma(clave string) error {
+	normalizada := strings.TrimSpace(clave)
+	if normalizada == "" {
+		return errors.New("CLAVE_FIRMA no puede estar vacía ni contener solo espacios; " +
+			"genere una clave aleatoria propia de al menos 32 bytes")
+	}
+	if _, esMarcador := marcadoresClaveFirma[strings.ToLower(normalizada)]; esMarcador {
+		return errors.New("CLAVE_FIRMA no puede ser un marcador de ejemplo; " +
+			"genere una clave aleatoria propia de al menos 32 bytes")
+	}
+	if len(normalizada) < longitudMinimaClaveFirma {
+		return errors.New("CLAVE_FIRMA debe tener al menos 32 bytes; " +
+			"genere una clave aleatoria propia")
+	}
+	return nil
+}
+
 // Config es todo lo que el servidor necesita saber del entorno donde corre.
 type Config struct {
 	DatabaseURL  string        // secreto: lleva la contraseña. Sin valor por defecto.
-	ClaveFirma   string        // secreto: firma los tokens. Sin valor por defecto.
+	ClaveFirma   string        // secreto: firma los tokens. Mínimo 32 bytes; sin marcadores.
 	Puerto       string        // configuración: cambia por máquina. Por defecto 8080.
 	TiempoEspera time.Duration // configuración: cuánto se espera antes de cortar. Por defecto 5s.
 }
@@ -35,9 +68,8 @@ func Cargar() (Config, error) {
 	}
 
 	c.ClaveFirma = os.Getenv("CLAVE_FIRMA")
-	if c.ClaveFirma == "" {
-		return c, fmt.Errorf("falta CLAVE_FIRMA " +
-			"(copie .env.example a .env y defina un secreto largo e inventado)")
+	if err := validarClaveFirma(c.ClaveFirma); err != nil {
+		return c, err
 	}
 
 	c.Puerto = os.Getenv("PUERTO")

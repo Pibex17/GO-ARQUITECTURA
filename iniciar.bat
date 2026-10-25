@@ -88,6 +88,8 @@ REM --- 4. Archivo .env -------------------------------------------------
 if not exist ".env" (
     echo [AVISO] No existe .env; se crea a partir de .env.example.
     copy ".env.example" ".env" >nul
+    echo [AVISO] Edite .env y defina CLAVE_FIRMA con una clave aleatoria propia de al menos 32 bytes.
+    echo         No use CAMBIE_ESTO ni valores de ejemplo; el servidor los rechaza.
 )
 
 REM --- 5. Go debe estar instalado --------------------------------------
