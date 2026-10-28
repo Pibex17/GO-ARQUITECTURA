@@ -18,12 +18,21 @@ import (
 // tokensDePrueba usa un secreto de juguete: no sale de este archivo.
 var tokensDePrueba = sesion.NuevosTokens("secreto-solo-de-las-pruebas-reservas")
 
+// vinculosDelToken devuelve un usuario de negocio coherente con el rol
+// firmado en el token. Permite probar el orden de las comprobaciones sin
+// base de datos.
+type vinculosDelToken struct{}
+
+func (vinculosDelToken) UsuarioDe(s sesion.Sesion) (usuarios.Usuario, error) {
+	return usuarios.Usuario{ID: 1, Rol: s.Rol}, nil
+}
+
 // enrutador arma el servidor de prueba SIN base de datos (DB: nil).
 // Sirve porque todas las pruebas de este archivo responden ANTES
 // de la línea "desde aquí hace falta la base de datos".
 func enrutador() http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{DB: nil}).Rutas(r, tokensDePrueba)
+	(&Manejador{DB: nil, Vinculos: vinculosDelToken{}}).Rutas(r, tokensDePrueba)
 	return r
 }
 
@@ -186,6 +195,87 @@ func TestRutasDeUnSoloRolRechazanElOtroRol(t *testing.T) {
 			}
 			if !strings.Contains(grabadora.Body.String(), "permiso_denegado") {
 				t.Fatalf("falta el código permiso_denegado: %s", grabadora.Body.String())
+			}
+		})
+	}
+}
+
+// TestClienteNoAlcanzaLaValidacionDeTransicion: aunque el cuerpo pida un
+// estado inexistente o una transición prohibida, el rol cliente se rechaza
+// con 403 antes de evaluar la regla de estados (nunca 422).
+func TestClienteNoAlcanzaLaValidacionDeTransicion(t *testing.T) {
+	casos := []struct {
+		nombre string
+		cuerpo string
+	}{
+		{"cuerpo con transición válida", `{"NuevoEstado":"jugada"}`},
+		{"estado inexistente", `{"NuevoEstado":"volando"}`},
+		{"JSON roto", `{"NuevoEstado":`},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			peticion := httptest.NewRequest(http.MethodPatch, "/reservas/1/estado",
+				strings.NewReader(caso.cuerpo))
+			peticion = conRol(t, peticion, sesion.RolCliente)
+			grabadora := httptest.NewRecorder()
+			enrutador().ServeHTTP(grabadora, peticion)
+
+			if grabadora.Code != http.StatusForbidden {
+				t.Fatalf("se esperaba 403 y llegó %d con cuerpo %s",
+					grabadora.Code, grabadora.Body.String())
+			}
+			if codigo := codigoDeError(t, grabadora.Body.Bytes()); codigo != "permiso_denegado" {
+				t.Fatalf("se esperaba permiso_denegado y llegó %q", codigo)
+			}
+		})
+	}
+}
+
+// TestCambiarEstadoRechazaElRolAntesDeLaTransicion comprueba el orden
+// dentro del manejador, sin el guardia SoloRol de la ruta: el cliente debe
+// recibir 403 antes de que se valide el cuerpo o la transición.
+func TestCambiarEstadoRechazaElRolAntesDeLaTransicion(t *testing.T) {
+	manejador := &Manejador{DB: nil, Vinculos: vinculosDelToken{}}
+	r := chi.NewRouter()
+	r.With(tokensDePrueba.Autenticar).
+		Patch("/reservas/{id}/estado", manejador.cambiarEstado)
+
+	casos := []struct {
+		nombre string
+		rol    string
+		cuerpo string
+		codigo int
+		error  string
+	}{
+		{
+			nombre: "cliente con estado inexistente",
+			rol:    sesion.RolCliente,
+			cuerpo: `{"NuevoEstado":"volando"}`,
+			codigo: http.StatusForbidden,
+			error:  "permiso_denegado",
+		},
+		{
+			nombre: "administrador con estado inexistente",
+			rol:    sesion.RolAdministrador,
+			cuerpo: `{"NuevoEstado":"volando"}`,
+			codigo: http.StatusUnprocessableEntity,
+			error:  "estado_invalido",
+		},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nombre, func(t *testing.T) {
+			peticion := httptest.NewRequest(http.MethodPatch, "/reservas/1/estado",
+				strings.NewReader(caso.cuerpo))
+			peticion = conRol(t, peticion, caso.rol)
+			grabadora := httptest.NewRecorder()
+			r.ServeHTTP(grabadora, peticion)
+
+			if grabadora.Code != caso.codigo {
+				t.Fatalf("se esperaba %d y llegó %d con cuerpo %s",
+					caso.codigo, grabadora.Code, grabadora.Body.String())
+			}
+			if codigo := codigoDeError(t, grabadora.Body.Bytes()); codigo != caso.error {
+				t.Fatalf("se esperaba %q y llegó %q", caso.error, codigo)
 			}
 		})
 	}

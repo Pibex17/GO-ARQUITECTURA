@@ -292,24 +292,18 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Leer el JSON. Si viene roto, 400 y se sale.
-	var entrada entradaCambiarEstado
-	if err := json.NewDecoder(r.Body).Decode(&entrada); err != nil {
-		respuesta.Error(w, http.StatusBadRequest,
-			"cuerpo_malformado", "el cuerpo debe ser JSON")
-		return
-	}
-	// 2. Validar el estado pedido. Esta SÍ responde antes de tocar m.DB.
-	if !estadosValidos[entrada.NuevoEstado] {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"estado_invalido", "ese estado no existe")
-		return
-	}
-
-	// 3. El administrador autenticado debe estar vinculado a su usuario
-	// de negocio. La ruta es solo del administrador (rúbrica del Hito 2).
+	// 1. Autenticación y autorización ANTES de evaluar el cuerpo o la
+	// transición de negocio. La ruta ya exige administrador con SoloRol,
+	// pero se repite aquí para que un cambio en el enrutamiento no deje
+	// la regla de estados como primera defensa: un rol no autorizado debe
+	// recibir 403, nunca 422.
 	s, ok := sesionActual(w, r)
 	if !ok {
+		return
+	}
+	if s.Rol != sesion.RolAdministrador {
+		respuesta.Error(w, http.StatusForbidden,
+			"permiso_denegado", "su rol no tiene permiso para esta acción")
 		return
 	}
 	usuario, err := m.vinculos().UsuarioDe(s)
@@ -317,9 +311,18 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 		responderSinVinculo(w)
 		return
 	}
-	if s.Rol != sesion.RolAdministrador {
-		respuesta.Error(w, http.StatusForbidden,
-			"permiso_denegado", "su rol no tiene permiso para esta acción")
+
+	// 2. Leer el JSON. Si viene roto, 400 y se sale.
+	var entrada entradaCambiarEstado
+	if err := json.NewDecoder(r.Body).Decode(&entrada); err != nil {
+		respuesta.Error(w, http.StatusBadRequest,
+			"cuerpo_malformado", "el cuerpo debe ser JSON")
+		return
+	}
+	// 3. Validar el estado pedido. Esta SÍ responde antes de tocar m.DB.
+	if !estadosValidos[entrada.NuevoEstado] {
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"estado_invalido", "ese estado no existe")
 		return
 	}
 

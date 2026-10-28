@@ -11,7 +11,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"canchas-sinteticas/internal/inscripcion"
 	"canchas-sinteticas/internal/respuesta"
 	"canchas-sinteticas/internal/sesion"
 )
@@ -163,14 +162,13 @@ func (m *Manejador) obtener(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var partido Partido
-	if err := m.DB.First(&partido, id).Error; err != nil {
+	partido, err := m.repositorio().PartidoPorID(id)
+	if err != nil {
 		respuesta.Error(w, http.StatusNotFound, "no_encontrado", "no existe un partido con ese id")
 		return
 	}
 
-	var inscripciones int64
-	m.DB.Model(&inscripcion.Inscripcion{}).Where("partido_id = ?", partido.ID).Count(&inscripciones)
+	inscripciones, _ := m.repositorio().ContarInscripciones(partido.ID)
 
 	respuesta.Exito(w, http.StatusOK, map[string]any{
 		"partido":         partido,

@@ -1,6 +1,7 @@
 package partidos
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,6 +129,60 @@ func TestCrearConAdministradorResponde403(t *testing.T) {
 	}
 }
 
+// TestObtenerDetallePartidoUsaRepositorio: el handler no consulta la base
+// directamente; obtiene el partido y el conteo a través del repositorio.
+func TestObtenerDetallePartidoUsaRepositorio(t *testing.T) {
+	repo := &repoPartidosFalso{
+		partido:       &Partido{ID: 1, ReservaID: 2, Nombre: "Picadito", CupoMaximo: 10},
+		inscripciones: 3,
+	}
+	enrutador := enrutadorCon(repo, vinculosFalsos{})
+
+	peticion := httptest.NewRequest(http.MethodGet, "/partidos/1", nil)
+	peticion = conRol(t, peticion, sesion.RolCliente)
+	grabadora := httptest.NewRecorder()
+	enrutador.ServeHTTP(grabadora, peticion)
+
+	if grabadora.Code != http.StatusOK {
+		t.Fatalf("se esperaba 200 y llegó %d con cuerpo %s",
+			grabadora.Code, grabadora.Body.String())
+	}
+
+	var respuesta struct {
+		OK    bool `json:"ok"`
+		Datos struct {
+			Partido        Partido `json:"partido"`
+			Inscriptos     int64   `json:"inscriptos"`
+			CuposRestantes int     `json:"cupos_restantes"`
+		} `json:"datos"`
+	}
+	if err := json.Unmarshal(grabadora.Body.Bytes(), &respuesta); err != nil {
+		t.Fatalf("la respuesta no es JSON: %v", err)
+	}
+	if !respuesta.OK || respuesta.Datos.Partido.ID != 1 {
+		t.Fatalf("no se devolvió el partido esperado: %s", grabadora.Body.String())
+	}
+	if respuesta.Datos.Inscriptos != 3 || respuesta.Datos.CuposRestantes != 7 {
+		t.Fatalf("conteo incorrecto: %s", grabadora.Body.String())
+	}
+}
+
+// TestObtenerPartidoInexistenteResponde404: un error del repositorio se
+// traduce al mismo 404 de antes.
+func TestObtenerPartidoInexistenteResponde404(t *testing.T) {
+	enrutador := enrutadorCon(&repoPartidosFalso{}, vinculosFalsos{})
+
+	peticion := httptest.NewRequest(http.MethodGet, "/partidos/99", nil)
+	peticion = conRol(t, peticion, sesion.RolCliente)
+	grabadora := httptest.NewRecorder()
+	enrutador.ServeHTTP(grabadora, peticion)
+
+	if grabadora.Code != http.StatusNotFound {
+		t.Fatalf("se esperaba 404 y llegó %d con cuerpo %s",
+			grabadora.Code, grabadora.Body.String())
+	}
+}
+
 // --- Dobles para probar la propiedad sin PostgreSQL ---
 
 type vinculosFalsos struct {
@@ -140,12 +195,16 @@ func (v vinculosFalsos) UsuarioDe(sesion.Sesion) (usuarios.Usuario, error) {
 }
 
 type repoPartidosFalso struct {
-	reserva      reservas.Reserva
-	errReserva   error
-	existente    *Partido
-	errExistente error
-	creado       *Partido
-	errCrear     error
+	reserva          reservas.Reserva
+	errReserva       error
+	existente        *Partido
+	errExistente     error
+	partido          *Partido
+	errPartido       error
+	inscripciones    int64
+	errInscripciones error
+	creado           *Partido
+	errCrear         error
 }
 
 func (r *repoPartidosFalso) ReservaPorID(uint) (reservas.Reserva, error) {
@@ -166,6 +225,20 @@ func (r *repoPartidosFalso) PartidoPorReservaID(uint) (Partido, error) {
 		return *r.existente, nil
 	}
 	return Partido{}, gorm.ErrRecordNotFound
+}
+
+func (r *repoPartidosFalso) PartidoPorID(uint) (Partido, error) {
+	if r.errPartido != nil {
+		return Partido{}, r.errPartido
+	}
+	if r.partido != nil {
+		return *r.partido, nil
+	}
+	return Partido{}, gorm.ErrRecordNotFound
+}
+
+func (r *repoPartidosFalso) ContarInscripciones(uint) (int64, error) {
+	return r.inscripciones, r.errInscripciones
 }
 
 func (r *repoPartidosFalso) CrearPartido(partido *Partido) error {

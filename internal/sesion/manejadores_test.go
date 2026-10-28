@@ -80,6 +80,64 @@ func TestLoginExitosoDevuelveTokenValido(t *testing.T) {
 	}
 }
 
+// TestLoginSoloDevuelveElToken: la respuesta no incluye datos de la cuenta,
+// ni la contraseña, ni el hash. El token es el único dato público.
+func TestLoginSoloDevuelveElToken(t *testing.T) {
+	cuenta := cuentaDePrueba(t)
+	peticion := httptest.NewRequest(http.MethodPost, "/login",
+		strings.NewReader(`{"usuario": "ana", "clave": "ana-2026"}`))
+	grabadora := httptest.NewRecorder()
+
+	enrutadorDePrueba(repositorioFalso{cuenta: cuenta}).ServeHTTP(grabadora, peticion)
+
+	if grabadora.Code != http.StatusOK {
+		t.Fatalf("se esperaba 200 y llegó %d con cuerpo %s",
+			grabadora.Code, grabadora.Body.String())
+	}
+
+	var envoltura struct {
+		OK    bool           `json:"ok"`
+		Datos map[string]any `json:"datos"`
+	}
+	if err := json.Unmarshal(grabadora.Body.Bytes(), &envoltura); err != nil {
+		t.Fatalf("la respuesta no es JSON: %v", err)
+	}
+	if !envoltura.OK {
+		t.Fatalf("la respuesta no es de éxito: %s", grabadora.Body.String())
+	}
+	if len(envoltura.Datos) != 1 {
+		t.Fatalf("la respuesta debería traer solo el token y trae %v", envoltura.Datos)
+	}
+	if _, existe := envoltura.Datos["token"]; !existe {
+		t.Fatalf("falta el token en la respuesta: %s", grabadora.Body.String())
+	}
+
+	cuerpo := grabadora.Body.String()
+	if strings.Contains(cuerpo, cuenta.ClaveHash) {
+		t.Fatal("la respuesta expone el hash de la contraseña")
+	}
+	if strings.Contains(cuerpo, "ana-2026") {
+		t.Fatal("la respuesta expone la contraseña en claro")
+	}
+}
+
+// TestCuentaNoSerializaClaveHash: aunque alguien devuelva una Cuenta
+// completa, el hash de la contraseña queda fuera del JSON.
+func TestCuentaNoSerializaClaveHash(t *testing.T) {
+	cuenta := cuentaDePrueba(t)
+
+	datos, err := json.Marshal(cuenta)
+	if err != nil {
+		t.Fatalf("no se pudo serializar la cuenta: %v", err)
+	}
+	if strings.Contains(string(datos), "ClaveHash") {
+		t.Fatalf("el JSON incluye el campo ClaveHash: %s", datos)
+	}
+	if strings.Contains(string(datos), cuenta.ClaveHash) {
+		t.Fatalf("el JSON incluye el hash de la contraseña: %s", datos)
+	}
+}
+
 // TestLoginSigueSiendoPublico: el login se registra sin el guardia de
 // sesión; se puede llamar sin Authorization y entrega el token.
 func TestLoginSigueSiendoPublico(t *testing.T) {
