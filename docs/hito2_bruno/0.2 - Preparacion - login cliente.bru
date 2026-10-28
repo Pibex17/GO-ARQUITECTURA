@@ -1,0 +1,41 @@
+meta {
+  name: 0.2 - Preparacion - login cliente
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/login
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "usuario": "ana",
+    "clave": "ana-2026"
+  }
+}
+
+script:post-response {
+  if (res.status === 200 && res.body && res.body.datos && res.body.datos.token) {
+    bru.setVar("clienteToken", res.body.datos.token);
+  }
+}
+
+tests {
+  test("0.2 - login de ana responde 200", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.ok).to.equal(true);
+  });
+
+  test("0.2 - guarda el JWT del cliente", function() {
+    const token = bru.getVar("clienteToken");
+    expect(token).to.be.a("string");
+    expect(token.length).to.be.greaterThan(0);
+  });
+}

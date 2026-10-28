@@ -1,7 +1,7 @@
 meta {
   name: 3 - Consultar reservas - 200
   type: http
-  seq: 3
+  seq: 6
 }
 
 get {
@@ -15,23 +15,25 @@ headers {
 }
 
 script:post-response {
-  // Se limpian primero para no reutilizar IDs de una ejecución anterior.
-  bru.setVar("reservaId", "");
-  bru.setVar("canchaId", "");
+  // La preparación 0.3 ya fijó la reserva nueva. Solo se busca una pendiente
+  // como respaldo si alguien ejecuta la petición 3 sin la preparación.
+  if (!bru.getVar("reservaId")) {
+    const lista = (res.body && Array.isArray(res.body.datos)) ? res.body.datos : [];
+    let pendiente = null;
 
-  const lista = (res.body && Array.isArray(res.body.datos)) ? res.body.datos : [];
-  let pendiente = null;
-
-  for (let i = 0; i < lista.length; i++) {
-    if (lista[i].Estado === "pendiente") {
-      pendiente = lista[i];
-      break;
+    for (let i = 0; i < lista.length; i++) {
+      if (lista[i].Estado === "pendiente") {
+        pendiente = lista[i];
+        break;
+      }
     }
-  }
 
-  if (pendiente) {
-    bru.setVar("reservaId", pendiente.ID);
-    bru.setVar("canchaId", pendiente.CanchaID);
+    if (pendiente) {
+      bru.setVar("reservaId", pendiente.ID);
+      if (!bru.getVar("canchaId")) {
+        bru.setVar("canchaId", pendiente.CanchaID);
+      }
+    }
   }
 }
 
@@ -40,5 +42,10 @@ tests {
     expect(res.status).to.equal(200);
     expect(res.body.ok).to.equal(true);
     expect(res.body.datos).to.be.an("array");
+  });
+
+  test("3 - hay una reserva pendiente preparada", function() {
+    const reservaId = Number(bru.getVar("reservaId"));
+    expect(reservaId).to.be.greaterThan(0);
   });
 }

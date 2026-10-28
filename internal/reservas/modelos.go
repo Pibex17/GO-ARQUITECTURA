@@ -5,7 +5,7 @@ package reservas
 type Reserva struct {
 	ID         uint
 	CanchaID   uint
-	ClienteID  uint // ID de un Usuario con rol cliente
+	ClienteID  uint   // ID de un Usuario con rol cliente
 	Fecha      string // "2026-10-21"
 	HoraInicio string // "HH:MM"
 	HoraFin    string // "HH:MM"
@@ -52,4 +52,21 @@ func transicionPermitida(de, a string) bool {
 		}
 	}
 	return false
+}
+
+// porcentajeSena es la regla de negocio de la ficha: la seña es el 30 %
+// del precio por hora de la cancha.
+const porcentajeSena = 0.30
+
+// NuevoPagoSena construye el pago que se crea al pasar una reserva a
+// "pago_por_verificar". La regla del 30 % vive aquí, no en el handler HTTP.
+func NuevoPagoSena(reservaID uint, precioHora float64, metodo, comprobanteURL string) Pago {
+	return Pago{
+		ReservaID:      reservaID,
+		Tipo:           "sena",
+		Monto:          precioHora * porcentajeSena,
+		Metodo:         metodo,
+		ComprobanteURL: comprobanteURL,
+		Estado:         "pendiente",
+	}
 }

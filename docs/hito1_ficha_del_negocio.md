@@ -464,8 +464,8 @@ Para el administrador, «las suyas» significa las de sus propias canchas. La ca
 
 Las acciones de la sección 6 que no aparecen en este mapa de seis endpoints (editar una cancha, definir horarios, reportes y el módulo Partido) quedan fuera de él.
 
-Endpoints que ya funcionan: [COMPLETAR: lista de endpoints] en [COMPLETAR: archivo, por ejemplo la ruta del handler o del router].
+Endpoints que ya funcionan: `POST /login`, `GET /canchas`, `POST /canchas`, `PATCH /canchas/{id}`, `POST /reservas`, `GET /reservas`, `GET /reservas/{id}`, `PATCH /reservas/{id}/estado`, `POST /partidos`, `GET /partidos/{id}` y `POST /partidos/{id}/inscripciones`, registrados en `main.go` (`nuevoEnrutador`) y en los métodos `Rutas` de cada paquete de `internal/`.
 
 ## 8. Declaración de IA
 
-Usamos Claude (Anthropic) de apoyo para redactar y estructurar las secciones 3 a 7 (restricciones locales, modelo con structs y diagramas, máquina de estados, roles y mapa de endpoints), y para verificar las fuentes de las secciones 1 y 2. Las decisiones de negocio (nombre del proyecto, entidades finales, monto de la seña, valor agregado y su alcance) y la elección de los dos casos fueron nuestras.
+Usamos Claude (Anthropic) de apoyo para redactar y estructurar las secciones 3 a 7 (restricciones locales, modelo con structs y diagramas, máquina de estados, roles y mapa de endpoints), y para verificar las fuentes de las secciones 1 y 2. Las decisiones de negocio (nombre del proyecto, entidades finales, monto de la seña, valor agregado y su alcance) y la elección de los dos casos fueron nuestras. Para la revisión final del Hito 2 se usó DeepSeek V4.1 Flash como apoyo para contrastar la lista de comprobación y revisar la documentación; cada cambio se validó con las pruebas del repositorio.

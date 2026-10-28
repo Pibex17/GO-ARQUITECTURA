@@ -369,14 +369,8 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 	// 6. Efectos según a qué estado se pasa.
 	switch entrada.NuevoEstado {
 	case "pago_por_verificar":
-		pago := Pago{
-			ReservaID:      reserva.ID,
-			Tipo:           "sena",
-			Monto:          cancha.PrecioHora * 0.30,
-			Metodo:         entrada.Metodo,
-			ComprobanteURL: entrada.ComprobanteURL,
-			Estado:         "pendiente",
-		}
+		pago := NuevoPagoSena(reserva.ID, cancha.PrecioHora,
+			entrada.Metodo, entrada.ComprobanteURL)
 		if err := m.repositorio().CrearPago(&pago); err != nil {
 			respuesta.Error(w, http.StatusInternalServerError,
 				"error_base", "no se pudo registrar el pago")

@@ -95,9 +95,13 @@ Vive en `internal/reservas/modelos.go`:
   - `confirmada` → `jugada`, `cancelada`
   - `jugada` y `cancelada` son terminales.
 - `transicionPermitida(de, a)` es una función pura.
+- `NuevoPagoSena(reservaID, precioHora, metodo, comprobante)` construye el
+  pago de seña con la regla de negocio del 30 % de `PrecioHora`.
 
-El handler `cambiarEstado` solo la invoca después de autenticar y autorizar.
-La prueba `internal/reservas/modelos_test.go` fija la tabla completa.
+El handler `cambiarEstado` solo orquesta: autentica, autoriza, valida la
+petición, consulta el repositorio y aplica la transición. La prueba
+`internal/reservas/modelos_test.go` fija la tabla completa y el cálculo de la
+seña.
 
 ## 4. Autenticación y autorización
 
@@ -126,8 +130,10 @@ roles, propiedad, validación de datos y transiciones.
 
 Archivo `main_integracion_test.go`, etiqueta `//go:build integration`.
 Levanta un `httptest.Server` con el mismo router de `main.go`, usa PostgreSQL
-real y recorre el guion de `docs/hito2_hoja.md` (login, 401, listado, 403,
-200 y 422).
+real, crea una reserva nueva por API y recorre el guion de
+`docs/hito2_hoja.md` (login, 401, listado, 403, 200 y 422). Después comprueba
+la transición válida `pendiente → pago_por_verificar` (`200`) y la seña del
+30 %.
 
 ```bash
 # Base desechable: la prueba borra y vuelve a sembrar sus tablas.

@@ -11,10 +11,17 @@
 **Por qué:** en nuestro negocio el historial de reservas y pagos de una cancha tiene valor para el administrador (cuánto facturó, qué días se usa más), y borrar la cancha borraría ese historial o rompería la clave foránea de sus reservas.
 **Alternativa descartada:** `DELETE /canchas/{id}` con `db.Delete`, que en PostgreSQL respondería `violates foreign key constraint` en cuanto la cancha tuviera una sola reserva — un error de base de datos disfrazado de operación normal del negocio.
 
-## D3 · La prueba que no escribimos contra PostgreSQL real
-**Prueba que no escribimos contra PostgreSQL real:** que crear una reserva para un horario ya ocupado responde `409` (`horario_ocupado`), y que cambiar el estado de una reserva a un estado no permitido por la Sección 5 responde `422` (`transicion_invalida`) cuando la reserva sí existe. Ambos casos se prueban de forma determinista con dobles del repositorio; lo que sigue sin probarse contra PostgreSQL real es la consulta `HayConflicto`, la siembra y el flujo completo de arranque.
-**Dónde empieza la base de datos:** en `internal/reservas/manejadores.go`, dentro de `crear`, después de resolver el vínculo de la cuenta y antes de `m.repositorio().CanchaPorID(...)`; y dentro de `cambiarEstado`, después de resolver el vínculo y antes de `m.repositorio().ReservaPorID(...)`.
-**Qué haría falta para probarlas contra PostgreSQL:** una base real (o sqlite en memoria) con canchas, usuarios y reservas ya sembradas, para poder crear una segunda reserva que choque con la primera y comprobar la consulta real de conflicto. Los códigos `409` y `422` ya se cubren con dobles, sin base real.
+## D3 · Prueba de integración contra PostgreSQL real
+**Decisión:** el flujo HTTP completo se prueba en `main_integracion_test.go`, con la etiqueta `//go:build integration`, un `httptest.Server` y PostgreSQL real. La prueba usa `TEST_DATABASE_URL` y una base desechable (`canchas_test`), porque `prepararBase` borra y vuelve a sembrar las tablas.
+**Qué cubre:** el arranque, la siembra, el login de `luis` y `ana`, la creación de una reserva nueva con `POST /reservas` (`201`), las seis peticiones de la demo (`401`, `200`, `200`, `403`, `200`, `422`), que el `422` no cambia el estado y la transición válida `pendiente → pago_por_verificar` (`200`) con la seña del 30 %.
+**Qué sigue solo con dobles:** el conflicto de horario `409 horario_ocupado` y las validaciones unitarias de cada manejador. La consulta `HayConflicto` no se ejecuta contra PostgreSQL en esta prueba.
+**Cómo se ejecuta:**
+```bash
+docker compose exec -T db createdb -U postgres canchas_test
+TEST_DATABASE_URL="host=localhost user=postgres password=postgres dbname=canchas_test port=5432 sslmode=disable" \
+  go test -tags=integration . -run TestAPIExtremoAExtremo -v -count=1
+```
+Sin `TEST_DATABASE_URL` la prueba se omite; por eso `go test ./...` no necesita Docker.
 
 ## D4 · Cómo resuelve el servidor la dirección de la base dentro de Docker
 **Decisión:** `DATABASE_URL` con `host=db` se define directamente en `docker-compose.yml`, no en el `.env` del repositorio. El `.env` que se usa para correr sin Docker sigue con `host=localhost`.
@@ -32,4 +39,9 @@
 - `POST /partidos/{id}/inscripciones` deriva `JugadorID` de la sesión; un `JugadorID` en el cuerpo se ignora.
 - `GET /canchas` devuelve solo activas al cliente y solo las del administrador autenticado a ese rol; `POST /canchas` asigna `AdministradorID` desde la sesión y `PATCH /canchas/{id}` exige que la cancha sea suya.
 **Transiciones del cliente pendientes:** la rúbrica del Hito 2 exige que `PATCH /reservas/{id}/estado` sea de un solo rol, así que se conserva solo para administrador. Las transiciones `pendiente → pago_por_verificar`, `pendiente → cancelada` y `confirmada → cancelada`, que la ficha asigna al cliente, no se pueden ejecutar por esa ruta en esta fase. No se creó una ruta alternativa; quedan documentadas para una decisión posterior.
-**Limitación:** no se probó la siembra ni el flujo completo contra PostgreSQL real.
+**Limitación cubierta:** la prueba de integración ya ejercita la siembra, el arranque y el flujo completo; el `409 horario_ocupado` sigue cubierto con dobles.
+
+## D6 · Arquitectura por capas y reglas de negocio
+**Decisión:** los manejadores HTTP no ejecutan consultas GORM. Cada paquete expone una interfaz `Repositorio` y un `ResolutorVinculos`; las implementaciones GORM viven en `repositorio.go` o `vinculo.go`. `main.go` solo orquesta: `prepararBase(db, reset)` migra y siembra, y `nuevoEnrutador(db, tokens)` arma el router. Así `main()` y la prueba de integración ejecutan exactamente el mismo esquema y las mismas rutas.
+**Reglas fuera de HTTP:** la máquina de estados (`estadosValidos`, `transicionesValidas`, `transicionPermitida`) y la regla de la seña (`NuevoPagoSena`, 30 % de `PrecioHora`) viven en `internal/reservas/modelos.go`, que no importa `net/http`. El manejador solo valida la petición, consulta el repositorio y aplica la transición.
+**Cómo lo comprobamos:** `grep` de consultas `m.DB.` en los manejadores, `internal/reservas/modelos_test.go` para las transiciones y la seña, y `main_integracion_test.go` para el flujo HTTP completo.

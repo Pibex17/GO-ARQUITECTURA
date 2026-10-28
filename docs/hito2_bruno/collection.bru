@@ -5,14 +5,18 @@ vars:pre-request {
   @description('''JWT del administrador. La petición 0 lo escribe en runtime; si el script no corre, asígnelo a mano.''')
   adminToken:
 
-  @description('''JWT del cliente. La petición 2 lo escribe en runtime; si el script no corre, asígnelo a mano.''')
+  @description('''JWT del cliente. Las peticiones 0.2 y 2 lo escriben en runtime; si el script no corre, asígnelo a mano.''')
   clienteToken:
 
-  @description('''Reserva pendiente que usa la petición 6. La petición 3 lo escribe; sin valor por defecto.''')
+  @description('''Reserva nueva que usa la petición 6. La petición 0.3 la crea y escribe su ID; sin valor por defecto.''')
   reservaId:
 
-  @description('''Cancha de luis que usan las peticiones 4 y 5. La petición 3 lo escribe; sin valor por defecto.''')
+  @description('''Cancha de luis que usan las peticiones 4 y 5. La petición 0.1 la elige y 0.3 la confirma; sin valor por defecto.''')
   canchaId:
+
+  @description('''Fecha y hora únicas que el script de 0.3 genera para crear una reserva nueva en cada ensayo.''')
+  fechaDemo:
+  horaDemo:
 }
 
 docs {

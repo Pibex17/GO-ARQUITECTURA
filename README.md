@@ -73,7 +73,18 @@ go vet ./...
 go mod verify
 ```
 
-Las pruebas de los manejadores usan dobles deterministas y no necesitan una base PostgreSQL real.
+Las pruebas unitarias de los manejadores usan dobles deterministas y no necesitan PostgreSQL.
+
+La prueba de extremo a extremo está en `main_integracion_test.go` y lleva la etiqueta `//go:build integration`. Usa PostgreSQL real y una base desechable:
+
+```bash
+docker compose exec -T db createdb -U postgres canchas_test
+
+TEST_DATABASE_URL="host=localhost user=postgres password=postgres dbname=canchas_test port=5432 sslmode=disable" \
+  go test -tags=integration . -run TestAPIExtremoAExtremo -v -count=1
+```
+
+`prepararBase` borra y vuelve a sembrar las tablas de `canchas_test`; no apunte `TEST_DATABASE_URL` a la base de trabajo. Sin esa variable, la prueba se omite y `go test ./...` sigue funcionando sin Docker.
 
 ## Documentación de la API
 
@@ -120,13 +131,14 @@ Notas que el contrato refleja porque son el comportamiento real del servidor:
 
 ```text
 .
-├── main.go                     # conexión, AutoMigrate, semillas, middleware y rutas
+├── main.go                     # configuración, conexión, migrate/siembra y servidor
+├── main_integracion_test.go    # prueba E2E con //go:build integration
 ├── go.mod / go.sum
 ├── iniciar.bat                 # arranque rápido en Windows (base + servidor)
 ├── detener.bat                 # apaga la base de datos
 ├── .env.example                # plantilla; sí se sube
 ├── .env                        # valores reales; NO se sube (está en .gitignore)
-├── .github/workflows/pruebas.yml
+├── .github/workflows/          # CI de pruebas
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
@@ -134,7 +146,10 @@ Notas que el contrato refleja porque son el comportamiento real del servidor:
 ├── docs/
 │   ├── openapi.yaml            # contrato OpenAPI 3.1
 │   ├── api.html                # Redoc 3 generado, autocontenido
-│   ├── decisiones.md           # decisiones de diseño (D1–D5)
+│   ├── arquitectura.md         # capas, dependencias y ubicación de las reglas
+│   ├── decisiones.md           # decisiones de diseño (D1–D6)
+│   ├── hito2_hoja.md           # guion de demostración y cumplimiento
+│   ├── hito2_bruno/            # colección Bruno y capturas
 │   ├── hito1_addendum.md
 │   └── hito1_ficha_del_negocio.md
 └── internal/
@@ -144,7 +159,7 @@ Notas que el contrato refleja porque son el comportamiento real del servidor:
     ├── usuarios/               # Usuario (cliente/administrador)
     ├── sesion/                 # login, JWT, roles y vínculos de negocio
     ├── canchas/                # Cancha, Horario + catálogo
-    ├── reservas/               # Reserva, Pagos y máquina de estados
+    ├── reservas/               # Reserva, Pagos, máquina de estados y seña
     ├── partidos/               # Partido y detalle con cupos
     └── inscripcion/            # Inscripción a partidos
 ```
@@ -154,3 +169,5 @@ Notas que el contrato refleja porque son el comportamiento real del servidor:
 Usamos Claude (Anthropic) para redactar el esqueleto completo del servidor (paquetes `respuesta`, `middleware`, `config`, `usuarios`, `canchas`, `reservas`, `main.go` y las pruebas), siguiendo la estructura enseñada en los talleres de las semanas 2 a 4, adaptada a nuestro negocio. Las reglas de negocio (seña del 30 %, máquina de estados, validaciones propias) fueron decisiones nuestras, discutidas antes de escribir el código.
 
 En el Hito 2 se usó IA como apoyo para revisar la autenticación JWT, la autorización por rol y propiedad, los dobles de prueba y el contrato OpenAPI. Las decisiones de alcance y los cambios se revisaron contra el código que realmente se ejecuta; los ejemplos de la documentación son ficticios y no contienen tokens ni contraseñas reales.
+
+En la revisión final del Hito 2 se usó DeepSeek V4.1 Flash como apoyo para contrastar la lista de comprobación, revisar la documentación y proponer cambios. Cada propuesta se validó ejecutando las pruebas y revisando el diff; las decisiones de negocio y la entrega siguen siendo responsabilidad del equipo.

@@ -4,7 +4,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,16 +50,39 @@ func TestAPIExtremoAExtremo(t *testing.T) {
 	servidor := httptest.NewServer(nuevoEnrutador(db, sesion.NuevosTokens(secretoDeIntegracion)))
 	defer servidor.Close()
 
-	// Preparación 0: login del administrador.
+	// Preparación 0: login de ambos roles y una reserva nueva para cada ensayo.
+	// La fecha y la hora llevan la marca actual para no chocar con una
+	// reserva anterior si la prueba se ejecuta varias veces sin resetear.
 	tokenAdmin := iniciarSesion(t, servidor.URL, "luis", "luis-2026")
+	tokenCliente := iniciarSesion(t, servidor.URL, "ana", "ana-2026")
+
+	fecha := time.Now().Format("2006-01-02")
+	horaInicio := time.Now().Format("15:04:05.000000000")
+	cuerpoReserva := fmt.Sprintf(
+		`{"CanchaID":1,"Fecha":%q,"HoraInicio":%q,"HoraFin":"23:59:59"}`,
+		fecha, horaInicio)
+	codigo, cuerpo := pedir(t, servidor.URL, http.MethodPost, "/reservas",
+		tokenCliente, cuerpoReserva)
+	exigirCodigo(t, "0. POST /reservas (reserva nueva)", codigo, http.StatusCreated, cuerpo)
+
+	var reservaNueva struct {
+		ID       uint
+		CanchaID uint
+		Estado   string
+	}
+	datosDe(t, cuerpo, &reservaNueva)
+	if reservaNueva.ID == 0 || reservaNueva.CanchaID != 1 || reservaNueva.Estado != "pendiente" {
+		t.Fatalf("la reserva de preparación no quedó utilizable: %+v", reservaNueva)
+	}
+	reservaID := reservaNueva.ID
 
 	// 1. Ruta protegida sin token.
-	codigo, cuerpo := pedir(t, servidor.URL, http.MethodGet, "/reservas", "", "")
+	codigo, cuerpo = pedir(t, servidor.URL, http.MethodGet, "/reservas", "", "")
 	exigirCodigo(t, "1. GET /reservas sin token", codigo, http.StatusUnauthorized, cuerpo)
 	exigirError(t, cuerpo, "falta_token")
 
 	// 2. Login del cliente.
-	tokenCliente := iniciarSesion(t, servidor.URL, "ana", "ana-2026")
+	tokenCliente = iniciarSesion(t, servidor.URL, "ana", "ana-2026")
 
 	// 3. Listado de reservas del cliente.
 	codigo, cuerpo = pedir(t, servidor.URL, http.MethodGet, "/reservas", tokenCliente, "")
@@ -105,23 +130,54 @@ func TestAPIExtremoAExtremo(t *testing.T) {
 	codigo, cuerpo = pedir(t, servidor.URL, http.MethodPatch, "/canchas/1", tokenAdmin, `{}`)
 	exigirCodigo(t, "5. PATCH /canchas/1 como administrador", codigo, http.StatusOK, cuerpo)
 
-	// 6. Transición prohibida desde "pendiente" (la reserva 1 está pendiente).
-	codigo, cuerpo = pedir(t, servidor.URL, http.MethodPatch, "/reservas/1/estado",
+	// 6. Transición prohibida desde "pendiente" (la reserva nueva está pendiente).
+	rutaEstado := fmt.Sprintf("/reservas/%d/estado", reservaID)
+	codigo, cuerpo = pedir(t, servidor.URL, http.MethodPatch, rutaEstado,
 		tokenAdmin, `{"NuevoEstado":"confirmada"}`)
-	exigirCodigo(t, "6. PATCH /reservas/1/estado prohibido", codigo,
+	exigirCodigo(t, "6. PATCH /reservas/{id}/estado prohibido", codigo,
 		http.StatusUnprocessableEntity, cuerpo)
 	exigirError(t, cuerpo, "transicion_invalida")
 
 	// El 422 no debe haber guardado nada: la reserva sigue pendiente.
-	codigo, cuerpo = pedir(t, servidor.URL, http.MethodGet, "/reservas/1", tokenAdmin, "")
-	exigirCodigo(t, "GET /reservas/1 tras el 422", codigo, http.StatusOK, cuerpo)
+	codigo, cuerpo = pedir(t, servidor.URL, http.MethodGet,
+		fmt.Sprintf("/reservas/%d", reservaID), tokenAdmin, "")
+	exigirCodigo(t, "GET /reservas/{id} tras el 422", codigo, http.StatusOK, cuerpo)
 	var reserva struct {
 		ID     uint
 		Estado string
 	}
 	datosDe(t, cuerpo, &reserva)
-	if reserva.ID != 1 || reserva.Estado != "pendiente" {
+	if reserva.ID != reservaID || reserva.Estado != "pendiente" {
 		t.Fatalf("la reserva cambió tras una transición inválida: %+v", reserva)
+	}
+
+	// La transición válida se cubre aquí, no en la demo de seis peticiones:
+	// desde "pendiente" el administrador puede pasar a "pago_por_verificar".
+	codigo, cuerpo = pedir(t, servidor.URL, http.MethodPatch, rutaEstado,
+		tokenAdmin, `{"NuevoEstado":"pago_por_verificar",`+
+			`"Metodo":"efectivo","ComprobanteURL":"https://ejemplo.invalid/comprobante.jpg"}`)
+	exigirCodigo(t, "Transición válida del administrador", codigo, http.StatusOK, cuerpo)
+
+	var actualizada struct {
+		ID     uint
+		Estado string
+		Pagos  []struct {
+			Tipo   string
+			Monto  float64
+			Estado string
+		}
+	}
+	datosDe(t, cuerpo, &actualizada)
+	if actualizada.ID != reservaID || actualizada.Estado != "pago_por_verificar" {
+		t.Fatalf("la transición válida no cambió el estado: %+v", actualizada)
+	}
+	if len(actualizada.Pagos) != 1 ||
+		actualizada.Pagos[0].Tipo != "sena" ||
+		actualizada.Pagos[0].Estado != "pendiente" {
+		t.Fatalf("no se creó la seña esperada: %+v", actualizada.Pagos)
+	}
+	if math.Abs(actualizada.Pagos[0].Monto-7.5) > 1e-9 {
+		t.Fatalf("la seña no es el 30 %% de 25: %v", actualizada.Pagos[0].Monto)
 	}
 }
 

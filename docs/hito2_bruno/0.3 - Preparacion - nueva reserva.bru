@@ -1,0 +1,54 @@
+meta {
+  name: 0.3 - Preparacion - nueva reserva
+  type: http
+  seq: 3
+}
+
+script:pre-request {
+  const ahora = new Date();
+  const dos = (n) => String(n).padStart(2, "0");
+  const fecha = `${ahora.getFullYear()}-${dos(ahora.getMonth() + 1)}-${dos(ahora.getDate())}`;
+  const hora = `${dos(ahora.getHours())}:${dos(ahora.getMinutes())}:${dos(ahora.getSeconds())}.${String(ahora.getMilliseconds()).padStart(3, "0")}`;
+  bru.setVar("fechaDemo", fecha);
+  bru.setVar("horaDemo", hora);
+}
+
+post {
+  url: {{baseUrl}}/reservas
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{clienteToken}}
+}
+
+body:json {
+  {
+    "CanchaID": {{canchaId}},
+    "Fecha": "{{fechaDemo}}",
+    "HoraInicio": "{{horaDemo}}",
+    "HoraFin": "23:59:59"
+  }
+}
+
+script:post-response {
+  if (res.status === 201 && res.body && res.body.datos && res.body.datos.ID) {
+    bru.setVar("reservaId", res.body.datos.ID);
+    bru.setVar("canchaId", res.body.datos.CanchaID);
+  }
+}
+
+tests {
+  test("0.3 - crea una reserva nueva en estado pendiente", function() {
+    expect(res.status).to.equal(201);
+    expect(res.body.ok).to.equal(true);
+    expect(res.body.datos.Estado).to.equal("pendiente");
+  });
+
+  test("0.3 - guarda la reserva nueva", function() {
+    const reservaId = Number(bru.getVar("reservaId"));
+    expect(reservaId).to.be.greaterThan(0);
+  });
+}

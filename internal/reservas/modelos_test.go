@@ -1,6 +1,9 @@
 package reservas
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestTransicionPermitida fija la tabla de la Sección 5 de la ficha.
 // Esta regla vive en modelos.go, sin importar net/http ni la base de datos.
@@ -48,5 +51,27 @@ func TestCadaEstadoTieneFilaEnLaTabla(t *testing.T) {
 		if _, existe := transicionesValidas[estado]; !existe {
 			t.Errorf("el estado %q no tiene fila en transicionesValidas", estado)
 		}
+	}
+}
+
+// TestNuevoPagoSenaFijaLaReglaDelTreintaPorCiento comprueba que la seña
+// se calcula fuera del handler HTTP y con los datos de la reserva.
+func TestNuevoPagoSenaFijaLaReglaDelTreintaPorCiento(t *testing.T) {
+	pago := NuevoPagoSena(3, 25, "efectivo", "https://ejemplo.invalid/comprobante.jpg")
+
+	if pago.ReservaID != 3 {
+		t.Errorf("ReservaID = %d; se esperaba 3", pago.ReservaID)
+	}
+	if pago.Tipo != "sena" {
+		t.Errorf("Tipo = %q; se esperaba sena", pago.Tipo)
+	}
+	if math.Abs(pago.Monto-7.5) > 1e-9 {
+		t.Errorf("Monto = %v; se esperaba 7.5 (30 %% de 25)", pago.Monto)
+	}
+	if pago.Metodo != "efectivo" || pago.ComprobanteURL == "" {
+		t.Errorf("no se copiaron los datos del pago: %+v", pago)
+	}
+	if pago.Estado != "pendiente" {
+		t.Errorf("Estado = %q; se esperaba pendiente", pago.Estado)
 	}
 }
