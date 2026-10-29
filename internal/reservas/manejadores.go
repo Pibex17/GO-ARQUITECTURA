@@ -319,7 +319,7 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 			"cuerpo_malformado", "el cuerpo debe ser JSON")
 		return
 	}
-	// 3. Validar el estado pedido. Esta SÍ responde antes de tocar m.DB.
+	// 3. Validar el estado pedido. Esta SÍ responde antes de consultar el repositorio.
 	if !estadosValidos[entrada.NuevoEstado] {
 		respuesta.Error(w, http.StatusUnprocessableEntity,
 			"estado_invalido", "ese estado no existe")
