@@ -2,7 +2,7 @@
 
 Colección importable para demostrar la autenticación JWT, el control de acceso por roles y la validación de transiciones de estado de la API. Utiliza las rutas y la estructura de respuestas definidas en `docs/openapi.yaml`.
 
-**Estado:** la colección crea una reserva nueva en la preparación 0.3 y después ejecuta las seis peticiones principales. La prueba `main_integracion_test.go` cubre el mismo flujo contra PostgreSQL real, incluida la transición válida que no forma parte de las seis. Las capturas 0–6 existentes corresponden a los escenarios principales; la preparación nueva se valida con la prueba de integración y con la ejecución de la colección.
+**Estado:** la colección crea una reserva nueva en la preparación 0.3 y después ejecuta las seis peticiones principales. La prueba `main_integracion_test.go` cubre el mismo flujo contra PostgreSQL real, incluida la transición válida que no forma parte de las seis. La colección se ejecutó con Bruno CLI 4.3.0 contra PostgreSQL: **10/10 peticiones y 16/16 pruebas en PASS**. Las capturas 0–6 existentes corresponden a los escenarios principales; la preparación nueva se valida con la prueba de integración y con la ejecución de la colección.
 
 ## 1. Estructura
 
@@ -193,5 +193,5 @@ npx @redocly/cli@2.71.0 lint docs/openapi.yaml
 - **Colección preparada:** rutas, cuerpos, preparación 0 y orden revisados.
 - **Pruebas Go:** `go test ./...` y la prueba de integración pasan.
 - **Integración HTTP/PostgreSQL:** reserva nueva, seis peticiones y transición válida cubiertas.
-- **Ejecución desde Bruno:** la colección se puede ejecutar en la aplicación; las capturas 0–6 son de los escenarios principales.
-- **Evidencias:** capturas existentes; si se exige una imagen de la reserva nueva, añadir la de la petición 0.3.
+- **Ejecución desde Bruno CLI:** `10/10` peticiones y `16/16` pruebas en `PASS` contra PostgreSQL; la aplicación Bruno usa la misma colección.
+- **Evidencias:** capturas 0–6 de los escenarios principales; la preparación 0.3 y la transición válida se evidencian con la ejecución de la colección y la prueba de integración. Si se exige una imagen de la reserva nueva, añadir la de la petición 0.3.
