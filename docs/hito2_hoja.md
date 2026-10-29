@@ -65,6 +65,7 @@ Las 11 operaciones de `docs/openapi.yaml`. `401` aplica a toda ruta protegida si
 | Cliente `403`, administrador `200` con transición válida y `422` con transición prohibida | Integración: `403 permiso_denegado`, `422 transicion_invalida` y `200` al pasar `pendiente → pago_por_verificar`; prueba unitaria `TestAdministradorCambiaReservaDeSuCancha`. |
 | `go test ./...` y prueba de integración | `go test ./... -count=1` y `go test -tags=integration . -run TestAPIExtremoAExtremo -v -count=1` pasan. |
 | Redocly sin errores ni advertencias | `npx @redocly/cli@2.71.0 lint docs/openapi.yaml` termina con `valid`. |
+| Redocly sin errores ni advertencias POWERSHELL | `npx.cmd --yes @redocly/cli@2.71.0 lint docs/openapi.yaml` termina con `valid`. POWERSHELL |
 | El login no expone la contraseña | `Cuenta.ClaveHash` tiene `json:"-"`; el login solo devuelve `datos.token`. |
 | Handlers sin consultas directas y reglas fuera de HTTP | Los handlers usan `Repositorio`/`ResolutorVinculos`; `transicionPermitida` y `NuevoPagoSena` viven en `internal/reservas/modelos.go`. |
 | Contrato, hoja, Bruno y capturas | Contrato validado; hoja y colección actualizadas; Bruno CLI ejecutó `10/10` peticiones y `16/16` pruebas; capturas 0–6 en `docs/hito2_bruno/hito2_capturas/`. |

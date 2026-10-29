@@ -183,7 +183,12 @@ go test -tags=integration . -run TestAPIExtremoAExtremo -v -count=1
 go build ./...
 go vet ./...
 go mod verify
+
 npx @redocly/cli@2.71.0 lint docs/openapi.yaml
+
+POWERSHELL - EXITOSO
+npx.cmd --yes @redocly/cli@2.71.0 lint docs/openapi.yaml
+
 ```
 
 `main_integracion_test.go` usa PostgreSQL real mediante `TEST_DATABASE_URL`, crea una reserva nueva, ejecuta las seis peticiones y comprueba además la transición válida `pendiente → pago_por_verificar` con `200`. Sin `TEST_DATABASE_URL`, la prueba se omite y `go test ./...` sigue funcionando sin Docker.
