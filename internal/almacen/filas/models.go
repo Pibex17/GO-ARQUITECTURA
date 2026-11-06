@@ -4,6 +4,16 @@
 
 package filas
 
+type Pago struct {
+	ID             int64
+	ReservaID      int64
+	Tipo           string
+	Monto          float64
+	Metodo         string
+	ComprobanteUrl string
+	Estado         string
+}
+
 type Reserva struct {
 	ID         int64
 	CanchaID   int64

@@ -13,3 +13,13 @@ CREATE TABLE reservas (
     hora_fin    text NOT NULL,
     estado      text NOT NULL
 );
+
+CREATE TABLE pagos (
+    id              bigserial PRIMARY KEY,
+    reserva_id      bigint NOT NULL REFERENCES reservas(id),
+    tipo            text NOT NULL,
+    monto           numeric NOT NULL CHECK (monto > 0),
+    metodo          text NOT NULL,
+    comprobante_url text NOT NULL,
+    estado          text NOT NULL
+);

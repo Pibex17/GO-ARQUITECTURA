@@ -30,6 +30,35 @@ func (q *Queries) BuscarReserva(ctx context.Context, id int64) (Reserva, error) 
 	return i, err
 }
 
+const crearPago = `-- name: CrearPago :one
+INSERT INTO pagos (reserva_id, tipo, monto, metodo, comprobante_url, estado)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id
+`
+
+type CrearPagoParams struct {
+	ReservaID      int64
+	Tipo           string
+	Monto          float64
+	Metodo         string
+	ComprobanteUrl string
+	Estado         string
+}
+
+func (q *Queries) CrearPago(ctx context.Context, arg CrearPagoParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, crearPago,
+		arg.ReservaID,
+		arg.Tipo,
+		arg.Monto,
+		arg.Metodo,
+		arg.ComprobanteUrl,
+		arg.Estado,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const guardarReserva = `-- name: GuardarReserva :execrows
 UPDATE reservas
 SET cancha_id   = $2,
@@ -65,4 +94,15 @@ func (q *Queries) GuardarReserva(ctx context.Context, arg GuardarReservaParams) 
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const verificarPago = `-- name: VerificarPago :exec
+UPDATE pagos
+SET estado = 'verificado'
+WHERE reserva_id = $1 AND tipo = 'sena' AND estado = 'pendiente'
+`
+
+func (q *Queries) VerificarPago(ctx context.Context, reservaID int64) error {
+	_, err := q.db.ExecContext(ctx, verificarPago, reservaID)
+	return err
 }

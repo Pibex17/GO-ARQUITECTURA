@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"gorm.io/gorm"
-
 	"canchas-sinteticas/internal/almacen/filas"
 	"canchas-sinteticas/internal/reservas"
 )
@@ -71,58 +69,70 @@ func (a *ReservasSqlc) ReservaPorID(id uint) (reservas.Reserva, error) {
 	return reserva, nil
 }
 
-// AplicarCambioEstado conserva la transacción del adaptador GORM: el pago
-// nuevo, la verificación de la seña y el estado de la reserva se confirman
-// juntos o se revierten juntos. El UPDATE de la reserva lo ejecuta sqlc
-// dentro de esa misma transacción.
+// AplicarCambioEstado resuelve con sqlc su propia transacción: el estado de
+// la reserva y el pago nuevo o su verificación se confirman juntos o se
+// revierten juntos. No usa la transacción de GORM ni mezcla herramientas.
 func (a *ReservasSqlc) AplicarCambioEstado(
 	reserva *reservas.Reserva, pago *reservas.Pago, verificarPago bool,
 ) error {
 	if reserva == nil {
 		return reservas.ErrReservaNoGuardada
 	}
+	if a.Conexion == nil {
+		return fmt.Errorf("%w: no hay conexión sqlc", reservas.ErrReservaNoGuardada)
+	}
 
-	return a.RepositorioGORM.DB.Transaction(func(tx *gorm.DB) error {
-		if pago != nil {
-			if err := tx.Create(pago).Error; err != nil {
-				return fmt.Errorf("%w: %v", reservas.ErrPagoNoRegistrado, err)
-			}
-		}
+	ctx := context.Background()
+	tx, err := a.Conexion.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("%w: %v", reservas.ErrReservaNoGuardada, err)
+	}
+	// Si no se llega a Commit, este Rollback deja la base como estaba.
+	defer func() { _ = tx.Rollback() }()
 
-		if verificarPago {
-			if err := tx.Model(&reservas.Pago{}).
-				Where("reserva_id = ? AND tipo = ? AND estado = ?",
-					reserva.ID, "sena", "pendiente").
-				Update("estado", "verificado").Error; err != nil {
-				return fmt.Errorf("%w: %v", reservas.ErrPagoNoVerificado, err)
-			}
-		}
+	q := a.q.WithTx(tx)
 
-		sqlTx, ok := tx.Statement.ConnPool.(*sql.Tx)
-		if !ok {
-			return fmt.Errorf("%w: no se pudo obtener la transacción SQL",
-				reservas.ErrReservaNoGuardada)
-		}
-
-		guardadas, err := a.q.WithTx(sqlTx).GuardarReserva(
-			context.Background(),
-			filas.GuardarReservaParams{
-				ID:         int64(reserva.ID),
-				CanchaID:   int64(reserva.CanchaID),
-				ClienteID:  int64(reserva.ClienteID),
-				Fecha:      reserva.Fecha,
-				HoraInicio: reserva.HoraInicio,
-				HoraFin:    reserva.HoraFin,
-				Estado:     reserva.Estado,
-			},
-		)
-		if err != nil {
-			return fmt.Errorf("%w: %v", reservas.ErrReservaNoGuardada, err)
-		}
-		if guardadas == 0 {
-			return reservas.ErrNoEncontrada
-		}
-
-		return nil
+	// Primero la reserva y después el pago: si la restricción del pago
+	// rechaza la fila, también se revierte el cambio de estado.
+	guardadas, err := q.GuardarReserva(ctx, filas.GuardarReservaParams{
+		ID:         int64(reserva.ID),
+		CanchaID:   int64(reserva.CanchaID),
+		ClienteID:  int64(reserva.ClienteID),
+		Fecha:      reserva.Fecha,
+		HoraInicio: reserva.HoraInicio,
+		HoraFin:    reserva.HoraFin,
+		Estado:     reserva.Estado,
 	})
+	if err != nil {
+		return fmt.Errorf("%w: %v", reservas.ErrReservaNoGuardada, err)
+	}
+	if guardadas == 0 {
+		return reservas.ErrNoEncontrada
+	}
+
+	if pago != nil {
+		id, err := q.CrearPago(ctx, filas.CrearPagoParams{
+			ReservaID:      int64(pago.ReservaID),
+			Tipo:           pago.Tipo,
+			Monto:          pago.Monto,
+			Metodo:         pago.Metodo,
+			ComprobanteUrl: pago.ComprobanteURL,
+			Estado:         pago.Estado,
+		})
+		if err != nil {
+			return fmt.Errorf("%w: %v", reservas.ErrPagoNoRegistrado, err)
+		}
+		pago.ID = uint(id)
+	}
+
+	if verificarPago {
+		if err := q.VerificarPago(ctx, int64(reserva.ID)); err != nil {
+			return fmt.Errorf("%w: %v", reservas.ErrPagoNoVerificado, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: %v", reservas.ErrReservaNoGuardada, err)
+	}
+	return nil
 }

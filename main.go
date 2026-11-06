@@ -4,12 +4,14 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"canchas-sinteticas/internal/almacen"
 	"canchas-sinteticas/internal/canchas"
 	"canchas-sinteticas/internal/config"
 	"canchas-sinteticas/internal/inscripcion"
@@ -80,6 +82,22 @@ func prepararBase(db *gorm.DB, reset bool) error {
 	return nil
 }
 
+// repositorioReservas elige el adaptador sin cambiar el servicio ni sus
+// pruebas. Por defecto se conserva GORM; con ADAPTADOR_RESERVAS=sqlc se usa
+// el adaptador sqlc, que resuelve sus propias transacciones.
+func repositorioReservas(db *gorm.DB) reservas.Repositorio {
+	if os.Getenv("ADAPTADOR_RESERVAS") != "sqlc" {
+		return reservas.RepositorioGORM{DB: db}
+	}
+
+	conexion, err := db.DB()
+	if err != nil {
+		log.Printf("no se pudo obtener la conexión *sql.DB: %v; se usa GORM", err)
+		return reservas.RepositorioGORM{DB: db}
+	}
+	return almacen.NuevoReservasSqlc(reservas.RepositorioGORM{DB: db}, conexion)
+}
+
 // nuevoEnrutador arma el servidor HTTP completo. No abre la base: recibe
 // la conexión ya lista y el emisor de tokens, igual que en main().
 func nuevoEnrutador(db *gorm.DB, tokens *sesion.Tokens) http.Handler {
@@ -108,7 +126,7 @@ func nuevoEnrutador(db *gorm.DB, tokens *sesion.Tokens) http.Handler {
 		Vinculos: vinculos,
 	}).Rutas(r, tokens)
 	(&reservas.Manejador{
-		Servicio: reservas.NuevoServicio(reservas.RepositorioGORM{DB: db}),
+		Servicio: reservas.NuevoServicio(repositorioReservas(db)),
 		Vinculos: vinculos,
 	}).Rutas(r, tokens)
 	(&partidos.Manejador{

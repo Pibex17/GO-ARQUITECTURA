@@ -17,9 +17,9 @@ type Reserva struct {
 type Pago struct {
 	ID             uint
 	ReservaID      uint
-	Tipo           string // sena | saldo
-	Monto          float64
-	Metodo         string // transferencia | efectivo | tarjeta
+	Tipo           string  // sena | saldo
+	Monto          float64 `gorm:"check:monto > 0"`
+	Metodo         string  // transferencia | efectivo | tarjeta
 	ComprobanteURL string
 	Estado         string // pendiente | verificado | rechazado
 }
