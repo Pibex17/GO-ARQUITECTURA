@@ -39,5 +39,21 @@ services:
     ports:
       - "8080:8080"
 
+  # Generador de código de sqlc. Vive en el perfil "tools" para que NO se
+  # ejecute con "docker compose up": solo corre cuando se le llama.
+  # Uso: docker compose run --rm sqlc
+  #
+  # Monta el proyecto completo porque sqlc necesita leer sqlc.yaml,
+  # db/schema.sql y db/consultas.sql, y escribir en internal/almacen/filas/.
+  # No depende de PostgreSQL: trabaja con el esquema y las consultas locales.
+  sqlc:
+    image: sqlc/sqlc:1.31.1
+    profiles: ["tools"]
+    working_dir: /src
+    volumes:
+      - .:/src
+    # La imagen ya trae /workspace/sqlc como entrypoint; solo faltan los args.
+    command: generate
+
 volumes:
   datos_postgres:
