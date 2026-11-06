@@ -7,3 +7,6 @@ sql:
       go:
         package: "filas"
         out: "internal/almacen/filas"
+        overrides:
+          - db_type: "pg_catalog.numeric"
+            go_type: "float64"

@@ -87,6 +87,13 @@ func (r RepositorioGORM) AplicarCambioEstado(
 	reserva *Reserva, pago *Pago, verificarPago bool,
 ) error {
 	err := r.DB.Transaction(func(tx *gorm.DB) error {
+		// Primero la reserva y después el pago: si el pago no se puede
+		// registrar, la transacción revierte también el cambio de estado.
+		// Omit("Pagos") evita que Save vuelva a tocar la relación: los
+		// pagos se crean o verifican explícitamente aquí abajo.
+		if err := tx.Omit("Pagos").Save(reserva).Error; err != nil {
+			return fmt.Errorf("%w: %v", ErrReservaNoGuardada, err)
+		}
 		if pago != nil {
 			if err := tx.Create(pago).Error; err != nil {
 				return fmt.Errorf("%w: %v", ErrPagoNoRegistrado, err)
@@ -99,9 +106,6 @@ func (r RepositorioGORM) AplicarCambioEstado(
 				Update("estado", "verificado").Error; err != nil {
 				return fmt.Errorf("%w: %v", ErrPagoNoVerificado, err)
 			}
-		}
-		if err := tx.Save(reserva).Error; err != nil {
-			return fmt.Errorf("%w: %v", ErrReservaNoGuardada, err)
 		}
 		return nil
 	})

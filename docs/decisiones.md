@@ -45,3 +45,51 @@ Sin `TEST_DATABASE_URL` la prueba se omite; por eso `go test ./...` no necesita 
 **Decisión:** el proyecto se organiza en tres capas con dependencias hacia dentro: **transporte HTTP → servicio → repositorio**. Los manejadores no ejecutan consultas GORM ni crean repositorios: dependen de una interfaz `ServicioX` y de `sesion.ResolutorVinculos`. Cada servicio contiene las reglas de negocio y declara la interfaz `Repositorio` que necesita; las implementaciones GORM viven en `repositorio.go` o `vinculo.go`. `main.go` solo compone: `prepararBase(db, reset)` migra y siembra, y `nuevoEnrutador(db, tokens)` arma el router. Así `main()` y la prueba de integración ejecutan exactamente el mismo esquema y las mismas rutas.
 **Reglas fuera de HTTP:** la máquina de estados (`estadosValidos`, `transicionesValidas`, `transicionPermitida`) y la regla de la seña (`NuevoPagoSena`, 30 % de `PrecioHora`) viven en `internal/reservas/modelos.go`, que no importa `net/http` ni GORM. El servicio aplica la transición y decide los efectos; el manejador solo traduce HTTP. La persistencia del pago, la verificación de la seña y el guardado de la reserva ocurren en una sola transacción dentro de `AplicarCambioEstado`.
 **Cómo lo comprobamos:** pruebas de servicio con repositorios falsos (`internal/*/servicio_test.go`), pruebas HTTP de los manejadores, `internal/reservas/modelos_test.go` para las transiciones y la seña, y `main_integracion_test.go` para el flujo HTTP completo con PostgreSQL real.
+
+## Semana 10 · transacciones
+
+### D1 · El caso
+
+El caso de uso es `AplicarCambioEstado`, en `internal/reservas/servicio.go`: al pasar una reserva a `pago_por_verificar` se escribe una fila nueva en `pagos` (la seña) y se actualiza `reservas.estado`; al pasarla a `confirmada` se actualiza el pago pendiente a `verificado` y también se actualiza la reserva. Son dos escrituras en dos tablas.
+
+Si falla la segunda escritura sin transacción, la reserva queda en `pago_por_verificar` o `confirmada` sin el pago correspondiente, o el pago queda verificado sin que la reserva haya cambiado. El cliente recibe un error, pero la mitad del trabajo ya quedó guardada. Por ejemplo, un pago con monto `0` viola la restricción `monto > 0`; sin transacción, la reserva ya se habría actualizado y el pago no existiría.
+
+### D2 · Opciones que consideramos
+
+1. **Transacción en el manejador o en el servicio.** El manejador abriría una transacción de GORM y pasaría el `*gorm.DB` transaccional al repositorio. Rompe la restricción 1 (el servicio o el manejador importan GORM), obliga a cambiar los manejadores y hace que las pruebas del servicio dependan de una base.
+2. **Unit of Work.** El servicio recibiría una interfaz con `Begin`, `Commit` y `Rollback`, y el repositorio participaría en esa unidad. Mantiene SQL fuera del servicio, pero le entrega el control del ciclo de transacción, complica el repositorio falso y hace más fácil olvidar un `Rollback`.
+3. **Un método transaccional del repositorio: `AplicarCambioEstado`.** El servicio expresa una sola intención de negocio y el adaptador decide cómo confirmar o revertir las dos escrituras. El servicio no importa GORM ni `database/sql`, las pruebas siguen usando un repositorio falso y los manejadores no cambian.
+4. **Transacción que cruza GORM y sqlc.** El adaptador sqlc usaría la transacción de GORM y metería una consulta sqlc dentro. Funciona en PostgreSQL, pero mezcla las dos herramientas y no cumple la restricción 5: cada adaptador debe resolver su propia transacción.
+
+### D3 · La que elegimos y por qué
+
+Elegimos la opción 3. `AplicarCambioEstado` es el límite transaccional del caso de uso; el servicio no puede olvidar la transacción porque no tiene operaciones separadas para guardar la reserva y crear el pago.
+
+- En `RepositorioGORM`, una `DB.Transaction` guarda primero la reserva (con `Omit("Pagos")` para no tocar la relación desde `Save`) y después crea o verifica el pago. Si el pago falla, GORM revierte el cambio de estado.
+- En `ReservasSqlc`, `Conexion.BeginTx` abre una transacción propia de `database/sql`; `q.WithTx(tx)` ejecuta `GuardarReserva`, `CrearPago` o `VerificarPago` dentro de ella y el `Commit` o el `Rollback` cierra el caso. No se usa la transacción de GORM ni se cruzan las herramientas.
+- La restricción `monto > 0` en `Pago.Monto` y en `db/schema.sql` es la red de seguridad de la base: un monto inválido no puede quedar guardado.
+
+Con esto se cumplen las cinco restricciones: el servicio no importa GORM ni `database/sql`; las pruebas del servicio siguen con el repositorio falso; los manejadores y las seis peticiones no cambian; el adaptador sqlc se puede seleccionar en `main.go` sin tocar el servicio ni sus pruebas; y cada adaptador revierte sus dos escrituras ante un fallo.
+
+### D4 · La que descartamos y por qué
+
+Descartamos la transacción en el manejador o en el servicio porque habría que cambiar los manejadores, inyectar GORM o `database/sql` en el servicio y renunciar a las pruebas con repositorio falso. Descartamos Unit of Work porque traslada `Begin`/`Commit`/`Rollback` al servicio: el repositorio falso tendría que simular una transacción y el riesgo de olvidar el `Rollback` vuelve a aparecer en la capa equivocada. Descartamos la transacción que cruza GORM y sqlc porque el adaptador sqlc quedaría atado a GORM y no sería un adaptador sqlc independiente; además, cambiar de herramienta obligaría a rehacer la transacción. No implementamos `ConfirmarYCobrar` porque el proyecto ya tiene un caso real equivalente en `AplicarCambioEstado`; inventar otro método habría duplicado la regla de negocio.
+
+### D5 · Con sqlc
+
+Para que sqlc participara en las dos escrituras agregamos la tabla `pagos` a `db/schema.sql`, las consultas `CrearPago :one` y `VerificarPago :exec` a `db/consultas.sql`, y un override en `sqlc.yaml` para que `numeric` se genere como `float64`. Después de `sqlc generate`, `AplicarCambioEstado` dejó de usar la transacción de GORM: ahora abre una transacción con `Conexion.BeginTx`, ejecuta las consultas con `a.q.WithTx(tx)` y confirma o revierte. El cambio de diseño fue mover la transacción al adaptador y hacer que las dos escrituras del caso sean consultas sqlc; el servicio, sus pruebas, los DTO y los manejadores quedaron igual. `ReservaPorID` sigue cargando los pagos con GORM porque esa lectura no forma parte de la transacción de escritura. Para usar este adaptador: `ADAPTADOR_RESERVAS=sqlc go run .`; sin la variable se conserva GORM.
+
+### D6 · Archivos
+
+**Archivos tocados:** `internal/reservas/modelos.go` (restricción `monto > 0`), `internal/reservas/repositorio.go` (orden y transacción GORM), `internal/almacen/reservas_sqlc.go` (transacción propia de sqlc), `db/schema.sql`, `db/consultas.sql`, `sqlc.yaml`, `internal/almacen/filas/models.go` y `internal/almacen/filas/consultas.sql.go` (generados), `main.go` (selector `ADAPTADOR_RESERVAS`), `transacciones_integracion_test.go` (prueba nueva), `docs/taller10/error_forzado.txt` (evidencia) y este archivo.
+
+**Archivos que quedaron igual:** `internal/reservas/servicio.go`, `internal/reservas/manejadores.go`, `internal/reservas/servicio_test.go`, `internal/reservas/manejadores_test.go`, los DTO de la fase 2 y las rutas HTTP. La prueba de integración existente `main_integracion_test.go` tampoco cambió.
+
+**Evidencia:** `docs/taller10/error_forzado.txt` guarda la salida de `TestTransaccionReservaPagoEsAtomica` con los dos adaptadores. En ambos casos el error es `chk_pagos_monto`, la reserva queda en `pendiente` y `pagos = 0`:
+
+```text
+adaptador=gorm error=no se pudo registrar el pago: ERROR: new row for relation "pagos" violates check constraint "chk_pagos_monto" (SQLSTATE 23514)
+adaptador=gorm reserva.estado="pendiente" pagos=0
+adaptador=sqlc error=no se pudo registrar el pago: ERROR: new row for relation "pagos" violates check constraint "chk_pagos_monto" (SQLSTATE 23514)
+adaptador=sqlc reserva.estado="pendiente" pagos=0
+```

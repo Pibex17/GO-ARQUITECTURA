@@ -1,0 +1,120 @@
+=== RUN   TestTransaccionReservaPagoEsAtomica
+=== RUN   TestTransaccionReservaPagoEsAtomica/gorm
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[37.879ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'usuarios' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[28.442ms] [rows:0] CREATE TABLE "usuarios" ("id" bigserial,"nombre" text,"email" text,"rol" text,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[2.493ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'canchas' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[12.986ms] [rows:0] CREATE TABLE "canchas" ("id" bigserial,"nombre" text,"tipo" text,"direccion" text,"precio_hora" decimal,"activa" boolean,"administrador_id" bigint,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.349ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'horarios' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[16.147ms] [rows:0] CREATE TABLE "horarios" ("id" bigserial,"cancha_id" bigint,"dia_semana" text,"hora_inicio" text,"hora_fin" text,"activo" boolean,PRIMARY KEY ("id"),CONSTRAINT "fk_canchas_horarios" FOREIGN KEY ("cancha_id") REFERENCES "canchas"("id"))
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[2.022ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'reservas' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[11.798ms] [rows:0] CREATE TABLE "reservas" ("id" bigserial,"cancha_id" bigint,"cliente_id" bigint,"fecha" text,"hora_inicio" text,"hora_fin" text,"estado" text,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.608ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pagos' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[15.235ms] [rows:0] CREATE TABLE "pagos" ("id" bigserial,"reserva_id" bigint,"tipo" text,"monto" decimal,"metodo" text,"comprobante_url" text,"estado" text,PRIMARY KEY ("id"),CONSTRAINT "fk_reservas_pagos" FOREIGN KEY ("reserva_id") REFERENCES "reservas"("id"),CONSTRAINT "chk_pagos_monto" CHECK (monto > 0))
+
+2026/11/05 22:59:25 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[2.051ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'partidos' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[13.168ms] [rows:0] CREATE TABLE "partidos" ("id" bigserial,"reserva_id" bigint,"nombre" text,"cupo_maximo" bigint,"codigo_invitacion" text,"creado_en" timestamptz,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.152ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'inscripcions' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[6.633ms] [rows:0] CREATE TABLE "inscripcions" ("id" bigserial,"partido_id" bigint,"jugador_id" bigint,"creado_en" timestamptz,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.522ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'cuentas' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[11.575ms] [rows:0] CREATE TABLE "cuentas" ("id" bigserial,"usuario" text NOT NULL,"rol" text,"clave_hash" text,"usuario_id" bigint,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[5.390ms] [rows:0] CREATE INDEX IF NOT EXISTS "idx_cuentas_usuario_id" ON "cuentas" ("usuario_id")
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[6.332ms] [rows:0] CREATE UNIQUE INDEX IF NOT EXISTS "idx_cuentas_usuario" ON "cuentas" ("usuario")
+    transacciones_integracion_test.go:78: adaptador=gorm error=no se pudo registrar el pago: ERROR: new row for relation "pagos" violates check constraint "chk_pagos_monto" (SQLSTATE 23514)
+    transacciones_integracion_test.go:97: adaptador=gorm reserva.estado="pendiente" pagos=0
+=== RUN   TestTransaccionReservaPagoEsAtomica/sqlc
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.211ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'usuarios' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[15.662ms] [rows:0] CREATE TABLE "usuarios" ("id" bigserial,"nombre" text,"email" text,"rol" text,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.056ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'canchas' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[13.320ms] [rows:0] CREATE TABLE "canchas" ("id" bigserial,"nombre" text,"tipo" text,"direccion" text,"precio_hora" decimal,"activa" boolean,"administrador_id" bigint,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.031ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'horarios' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[14.124ms] [rows:0] CREATE TABLE "horarios" ("id" bigserial,"cancha_id" bigint,"dia_semana" text,"hora_inicio" text,"hora_fin" text,"activo" boolean,PRIMARY KEY ("id"),CONSTRAINT "fk_canchas_horarios" FOREIGN KEY ("cancha_id") REFERENCES "canchas"("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[0.537ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'reservas' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[11.076ms] [rows:0] CREATE TABLE "reservas" ("id" bigserial,"cancha_id" bigint,"cliente_id" bigint,"fecha" text,"hora_inicio" text,"hora_fin" text,"estado" text,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.228ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pagos' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[13.324ms] [rows:0] CREATE TABLE "pagos" ("id" bigserial,"reserva_id" bigint,"tipo" text,"monto" decimal,"metodo" text,"comprobante_url" text,"estado" text,PRIMARY KEY ("id"),CONSTRAINT "fk_reservas_pagos" FOREIGN KEY ("reserva_id") REFERENCES "reservas"("id"),CONSTRAINT "chk_pagos_monto" CHECK (monto > 0))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.026ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'partidos' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[11.498ms] [rows:0] CREATE TABLE "partidos" ("id" bigserial,"reserva_id" bigint,"nombre" text,"cupo_maximo" bigint,"codigo_invitacion" text,"creado_en" timestamptz,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.246ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'inscripcions' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[6.170ms] [rows:0] CREATE TABLE "inscripcions" ("id" bigserial,"partido_id" bigint,"jugador_id" bigint,"creado_en" timestamptz,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[1.021ms] [rows:1] SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'cuentas' AND table_type = 'BASE TABLE'
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[10.646ms] [rows:0] CREATE TABLE "cuentas" ("id" bigserial,"usuario" text NOT NULL,"rol" text,"clave_hash" text,"usuario_id" bigint,PRIMARY KEY ("id"))
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[5.256ms] [rows:0] CREATE INDEX IF NOT EXISTS "idx_cuentas_usuario_id" ON "cuentas" ("usuario_id")
+
+2026/11/05 22:59:26 E:/UNIVERSIDAD/SEMESTRE 5/WEB/REPO-CANCHA/ServA-Aragundi-Castro/main.go:62
+[5.359ms] [rows:0] CREATE UNIQUE INDEX IF NOT EXISTS "idx_cuentas_usuario" ON "cuentas" ("usuario")
+    transacciones_integracion_test.go:78: adaptador=sqlc error=no se pudo registrar el pago: ERROR: new row for relation "pagos" violates check constraint "chk_pagos_monto" (SQLSTATE 23514)
+    transacciones_integracion_test.go:97: adaptador=sqlc reserva.estado="pendiente" pagos=0
+--- PASS: TestTransaccionReservaPagoEsAtomica (0.84s)
+    --- PASS: TestTransaccionReservaPagoEsAtomica/gorm (0.46s)
+    --- PASS: TestTransaccionReservaPagoEsAtomica/sqlc (0.32s)
+PASS
+ok  	canchas-sinteticas	2.680s
