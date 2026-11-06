@@ -1,0 +1,12 @@
+﻿?   	canchas-sinteticas	[no test files]
+?   	canchas-sinteticas/internal/almacen	[no test files]
+?   	canchas-sinteticas/internal/almacen/filas	[no test files]
+ok  	canchas-sinteticas/internal/canchas	1.830s
+ok  	canchas-sinteticas/internal/config	(cached)
+ok  	canchas-sinteticas/internal/inscripcion	1.893s
+?   	canchas-sinteticas/internal/middleware	[no test files]
+ok  	canchas-sinteticas/internal/partidos	2.666s
+ok  	canchas-sinteticas/internal/reservas	2.022s
+?   	canchas-sinteticas/internal/respuesta	[no test files]
+ok  	canchas-sinteticas/internal/sesion	2.567s
+?   	canchas-sinteticas/internal/usuarios	[no test files]
