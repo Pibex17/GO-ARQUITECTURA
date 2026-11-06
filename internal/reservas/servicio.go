@@ -43,7 +43,7 @@ func (e ErrorTransicion) Error() string {
 }
 
 // Repositorio es la persistencia que necesita el servicio. La interfaz vive
-// en la capa de servicio; la implementación GORM está en repositorio.go.
+// en la capa de servicio; la implementación GORM está en internal/almacen.
 type Repositorio interface {
 	CanchaPorID(id uint) (canchas.Cancha, error)
 	HayConflicto(canchaID uint, fecha, horaInicio string) (bool, error)

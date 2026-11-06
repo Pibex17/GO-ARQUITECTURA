@@ -10,6 +10,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"canchas-sinteticas/internal/almacen"
 	"canchas-sinteticas/internal/canchas"
 	"canchas-sinteticas/internal/config"
 	"canchas-sinteticas/internal/inscripcion"
@@ -108,7 +109,7 @@ func nuevoEnrutador(db *gorm.DB, tokens *sesion.Tokens) http.Handler {
 		Vinculos: vinculos,
 	}).Rutas(r, tokens)
 	(&reservas.Manejador{
-		Servicio: reservas.NuevoServicio(reservas.RepositorioGORM{DB: db}),
+		Servicio: reservas.NuevoServicio(almacen.NuevoReservas(db)),
 		Vinculos: vinculos,
 	}).Rutas(r, tokens)
 	(&partidos.Manejador{

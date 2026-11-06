@@ -8,12 +8,16 @@ regla de negocio.
 
 ```text
 ServA-Aragundi-Castro/
-├── main.go                      # arranque: config, conexión, migrate/siembra, router
+├── main.go                      # arranque: config, conexión, migrate/siembra, composición y router
 ├── main_integracion_test.go     # prueba E2E con `//go:build integration` (PostgreSQL real)
 ├── internal/
+│   ├── almacen/                 # adaptadores GORM que implementan las interfaces de negocio
+│   │   └── reservas.go          # implementa reservas.Repositorio
 │   ├── canchas/                 # Cancha, Horario
 │   │   ├── modelos.go
-│   │   ├── repositorio.go       # interfaz + implementación GORM
+│   │   ├── servicio.go          # interfaz Repositorio + casos de uso
+│   │   ├── servicio_test.go
+│   │   ├── repositorio.go       # implementación GORM
 │   │   ├── manejadores.go       # HTTP
 │   │   ├── manejadores_test.go
 │   │   └── semilla.go
@@ -22,6 +26,8 @@ ServA-Aragundi-Castro/
 │   │   └── config_test.go
 │   ├── inscripcion/             # Inscripcion a un partido
 │   │   ├── modelos.go
+│   │   ├── servicio.go
+│   │   ├── servicio_test.go
 │   │   ├── repositorio.go
 │   │   ├── manejadores.go
 │   │   ├── manejadores_test.go
@@ -30,6 +36,8 @@ ServA-Aragundi-Castro/
 │   │   └── middleware.go
 │   ├── partidos/                # Partido
 │   │   ├── modelos.go
+│   │   ├── servicio.go
+│   │   ├── servicio_test.go
 │   │   ├── repositorio.go
 │   │   ├── manejadores.go
 │   │   ├── manejadores_test.go
@@ -37,7 +45,9 @@ ServA-Aragundi-Castro/
 │   ├── reservas/                # Reserva + Pago + máquina de estados
 │   │   ├── modelos.go           # estados y transiciones (sin HTTP)
 │   │   ├── modelos_test.go      # prueba pura de la tabla de transiciones
-│   │   ├── repositorio.go
+│   │   ├── servicio.go          # interfaz Repositorio + casos de uso
+│   │   ├── servicio_test.go
+│   │   ├── repositorio.go       # FiltroReservas (sin GORM)
 │   │   ├── manejadores.go
 │   │   ├── manejadores_test.go
 │   │   └── semilla.go
@@ -49,6 +59,8 @@ ServA-Aragundi-Castro/
 │   │   ├── tokens.go
 │   │   ├── guardia.go
 │   │   ├── vinculo.go
+│   │   ├── servicio.go
+│   │   ├── servicio_test.go
 │   │   ├── manejadores.go
 │   │   ├── semilla.go
 │   │   └── *_test.go
@@ -68,20 +80,23 @@ ServA-Aragundi-Castro/
 ```text
 main.go
   └── manejadores HTTP (internal/*/manejadores.go)
-        ├── interfaz Repositorio          (internal/*/repositorio.go)
-        │     └── implementación GORM     (misma carpeta)
-        └── sesion.ResolutorVinculos      (internal/sesion/vinculo.go)
+        ├── interfaz ServicioX                (definida en manejadores.go)
+        │     └── *Servicio                   (internal/*/servicio.go)
+        │           └── interfaz Repositorio  (internal/*/servicio.go)
+        │                 └── implementación GORM (internal/almacen o repositorio.go)
+        └── sesion.ResolutorVinculos          (internal/sesion/vinculo.go)
               └── implementación GORM
 ```
 
-- **El manejador HTTP no ejecuta consultas directamente.** Solo conoce la
-  interfaz `Repositorio` y el `ResolutorVinculos`; las consultas GORM viven en
-  `repositorio.go`.
-- `Manejador.DB` solo se usa como valor por defecto en las fábricas
-  `m.repositorio()` y `m.vinculos()`. Las pruebas inyectan dobles con los
-  campos `Repo` y `Vinculos`, sin abrir PostgreSQL.
+- **El manejador HTTP no ejecuta consultas ni decide reglas.** Solo conoce la
+  interfaz de su servicio y el `ResolutorVinculos`; el servicio conoce la
+  interfaz `Repositorio` y las consultas GORM viven en `internal/almacen` o en el
+  `repositorio.go` del paquete.
+- `Manejador{Servicio, Vinculos}`: la composición (repositorio → servicio →
+  manejador) ocurre una sola vez en `nuevoEnrutador`. Las pruebas inyectan dobles
+  de servicio o de repositorio, sin abrir PostgreSQL.
 - Los paquetes de negocio no importan `net/http` (salvo los `manejadores.go`).
-  En particular, `internal/reservas/modelos.go` no depende de HTTP.
+  En particular, `internal/reservas/servicio.go` no importa `gorm`.
 
 ## 3. Máquina de estados de la reserva
 
@@ -98,8 +113,8 @@ Vive en `internal/reservas/modelos.go`:
 - `NuevoPagoSena(reservaID, precioHora, metodo, comprobante)` construye el
   pago de seña con la regla de negocio del 30 % de `PrecioHora`.
 
-El handler `cambiarEstado` solo orquesta: autentica, autoriza, valida la
-petición, consulta el repositorio y aplica la transición. La prueba
+El manejador `cambiarEstado` solo traduce HTTP; `Servicio.CambiarEstado` valida
+el estado, comprueba la propiedad y aplica la transición. La prueba
 `internal/reservas/modelos_test.go` fija la tabla completa y el cálculo de la
 seña.
 
@@ -112,8 +127,8 @@ seña.
   válido.
 - `SoloRol` responde 403 si el rol no corresponde. `PATCH /reservas/{id}/estado`
   se registra con `soloAdmin`.
-- La propiedad del recurso se comprueba dentro del manejador (403 si la
-  reserva no pertenece a una cancha del administrador).
+- La propiedad del recurso se comprueba dentro del servicio (`puedeAcceder`, 403
+  si la reserva no pertenece a una cancha del administrador).
 
 ## 5. Pruebas
 
@@ -123,8 +138,9 @@ seña.
 go test ./... -count=1
 ```
 
-Usan dobles de `Repositorio` y `ResolutorVinculos`. Cubren autenticación,
-roles, propiedad, validación de datos y transiciones.
+Las pruebas de `internal/*/servicio_test.go` usan un repositorio falso; las de
+`manejadores_test.go`, dobles de servicio y `ResolutorVinculos`. Cubren
+autenticación, roles, propiedad, validación de datos y transiciones.
 
 ### Integración HTTP/PostgreSQL
 
@@ -155,3 +171,6 @@ sin Docker, como en GitHub Actions.
    las mismas siembras.
 3. `internal/reservas/modelos_test.go` fija la máquina de estados.
 4. `main_integracion_test.go` añade la prueba de extremo a extremo.
+5. La capa de servicio (`internal/*/servicio.go`) separa el transporte HTTP de
+   las reglas de negocio, y el adaptador GORM de reservas vive en
+   `internal/almacen/reservas.go`.
