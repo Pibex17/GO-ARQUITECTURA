@@ -143,15 +143,10 @@ func responderError(w http.ResponseWriter, err error) {
 
 // POST /reservas
 func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
-	// 1. Leer el JSON. El cuerpo no decide al dueño: no aceptamos
-	// ClienteID, porque sale de la sesión.
-	var entrada struct {
-		CanchaID   uint
-		Fecha      string
-		HoraInicio string
-		HoraFin    string
-	}
-	if err := json.NewDecoder(r.Body).Decode(&entrada); err != nil {
+	// 1. Leer el JSON con el DTO de entrada. El cuerpo no decide al dueño
+	// ni el estado: ReservaPeticion no tiene esos campos.
+	var pedido ReservaPeticion
+	if err := json.NewDecoder(r.Body).Decode(&pedido); err != nil {
 		respuesta.Error(w, http.StatusBadRequest,
 			"cuerpo_malformado", "el cuerpo debe ser JSON")
 		return
@@ -168,17 +163,12 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reserva, err := m.Servicio.Crear(usuario.ID, EntradaCrear{
-		CanchaID:   entrada.CanchaID,
-		Fecha:      entrada.Fecha,
-		HoraInicio: entrada.HoraInicio,
-		HoraFin:    entrada.HoraFin,
-	})
+	reserva, err := m.Servicio.Crear(usuario.ID, pedido.aEntrada())
 	if err != nil {
 		responderError(w, err)
 		return
 	}
-	respuesta.Exito(w, http.StatusCreated, reserva)
+	respuesta.Exito(w, http.StatusCreated, nuevaReservaRespuesta(reserva))
 }
 
 // GET /reservas — el cliente solo ve las suyas; el administrador solo las
@@ -215,7 +205,7 @@ func (m *Manejador) listar(w http.ResponseWriter, r *http.Request) {
 		responderError(w, err)
 		return
 	}
-	respuesta.Exito(w, http.StatusOK, lista)
+	respuesta.Exito(w, http.StatusOK, nuevasReservasRespuesta(lista))
 }
 
 // GET /reservas/{id}
@@ -240,13 +230,7 @@ func (m *Manejador) obtener(w http.ResponseWriter, r *http.Request) {
 		responderError(w, err)
 		return
 	}
-	respuesta.Exito(w, http.StatusOK, reserva)
-}
-
-type entradaCambiarEstado struct {
-	NuevoEstado    string
-	Metodo         string // solo si NuevoEstado es "pago_por_verificar"
-	ComprobanteURL string // solo si NuevoEstado es "pago_por_verificar"
+	respuesta.Exito(w, http.StatusOK, nuevaReservaRespuesta(reserva))
 }
 
 // PATCH /reservas/{id}/estado
@@ -276,9 +260,9 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Leer el JSON. Si viene roto, 400 y se sale.
-	var entrada entradaCambiarEstado
-	if err := json.NewDecoder(r.Body).Decode(&entrada); err != nil {
+	// 2. Leer el JSON con el DTO de cambio de estado. Si viene roto, 400.
+	var pedido CambioEstadoPeticion
+	if err := json.NewDecoder(r.Body).Decode(&pedido); err != nil {
 		respuesta.Error(w, http.StatusBadRequest,
 			"cuerpo_malformado", "el cuerpo debe ser JSON")
 		return
@@ -286,10 +270,10 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 
 	// 3. El servicio valida el estado antes de consultar el repositorio.
 	actualizada, err := m.Servicio.CambiarEstado(
-		id, usuario.ID, entrada.NuevoEstado, entrada.Metodo, entrada.ComprobanteURL)
+		id, usuario.ID, pedido.NuevoEstado, pedido.Metodo, pedido.ComprobanteURL)
 	if err != nil {
 		responderError(w, err)
 		return
 	}
-	respuesta.Exito(w, http.StatusOK, actualizada)
+	respuesta.Exito(w, http.StatusOK, nuevaReservaRespuesta(actualizada))
 }

@@ -474,6 +474,49 @@ func TestClienteCreaReservaParaSiMismoEIgnoraClienteIDDelCuerpo(t *testing.T) {
 	}
 }
 
+// TestCrearIgnoraIDYEstadoDelCuerpo demuestra que el DTO de entrada no
+// permite fijar el id, el dueño ni el estado desde el cuerpo. El servidor
+// asigna el id y el estado inicial "pendiente".
+func TestCrearIgnoraIDYEstadoDelCuerpo(t *testing.T) {
+	repo := &repoReservasFalso{
+		canchas: map[uint]canchas.Cancha{
+			1: {ID: 1, Activa: true, PrecioHora: 100},
+		},
+	}
+	vinculos := vinculosFalsos{usuario: usuarios.Usuario{ID: 2, Rol: sesion.RolCliente}}
+	enrutador := enrutadorCon(repo, vinculos)
+
+	peticion := httptest.NewRequest(http.MethodPost, "/reservas",
+		strings.NewReader(`{"ID":77,"Estado":"jugada","ClienteID":99,"CanchaID":1,"Fecha":"2026-10-21","HoraInicio":"18:00","HoraFin":"19:00"}`))
+	peticion = conRol(t, peticion, sesion.RolCliente)
+	grabadora := httptest.NewRecorder()
+	enrutador.ServeHTTP(grabadora, peticion)
+
+	if grabadora.Code != http.StatusCreated {
+		t.Fatalf("se esperaba 201 y llegó %d con cuerpo %s",
+			grabadora.Code, grabadora.Body.String())
+	}
+
+	var creada ReservaRespuesta
+	datosDe(t, grabadora.Body.Bytes(), &creada)
+	if creada.ID == 0 || creada.ID == 77 {
+		t.Fatalf("el id debía asignarlo el servidor y llegó %d", creada.ID)
+	}
+	if creada.Estado != "pendiente" {
+		t.Fatalf("el estado inicial debía ser pendiente y llegó %q", creada.Estado)
+	}
+	if creada.ClienteID != 2 {
+		t.Fatalf("el dueño debía salir de la sesión (2) y llegó %d", creada.ClienteID)
+	}
+
+	if repo.creada == nil {
+		t.Fatal("no se guardó la reserva")
+	}
+	if repo.creada.ID == 77 || repo.creada.Estado != "pendiente" || repo.creada.ClienteID != 2 {
+		t.Fatalf("la reserva guardada conservó datos del cuerpo: %+v", *repo.creada)
+	}
+}
+
 // TestCrearReservaConHorarioOcupadoResponde409 cubre el conflicto de
 // horario con un doble determinista, sin necesitar PostgreSQL.
 func TestCrearReservaConHorarioOcupadoResponde409(t *testing.T) {
