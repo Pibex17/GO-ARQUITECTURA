@@ -1,0 +1,9 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "db/schema.sql"
+    queries: "db/consultas.sql"
+    gen:
+      go:
+        package: "filas"
+        out: "internal/almacen/filas"
