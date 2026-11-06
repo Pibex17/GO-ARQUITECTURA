@@ -4,12 +4,13 @@ jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
 info:
   title: ServA · API de reservas de canchas sintéticas
   version: 1.0.0
-  summary: Contrato del servidor HTTP real de ServA para el Hito 2.
+  summary: Contrato del servidor HTTP real de ServA para el Taller 10.
   description: |
     Contrato OpenAPI 3.1 de los once endpoints implementados en este repositorio.
-    Se redactó a partir de `main.go`, los manejadores, los modelos y el middleware,
-    no a partir de la documentación antigua. Cuando la ficha del Hito 1 y el código
-    difieren, este contrato representa el código que realmente se ejecuta.
+    Se contrastó con `main.go`, los manejadores, los modelos y el middleware para
+    la Fase 5 del Taller 10, no a partir de la documentación antigua. Cuando la
+    ficha del Hito 1 y el código difieren, este contrato representa el código que
+    realmente se ejecuta.
 
     ## Envoltura de las respuestas
 
@@ -51,19 +52,25 @@ info:
       responde sin exponer el detalle. Varias operaciones también pueden devolver
       `500 error_base` ante un fallo de base de datos.
 
-    ## Alcance del documento
+    ## Alcance y planificación
 
-    No se inventaron rutas nuevas. El mapa de la sección 7 de la ficha del Hito 1
-    no identifica endpoints adicionales que falten, y las acciones sin ruta
-    explícita (editar horarios, reportes, etc.) no se incluyen. Tampoco se marca
-    ninguna operación como `(plan)` porque las once documentadas ya existen.
+    No se inventaron rutas nuevas. Los once endpoints de `paths` son los que
+    existen y se ejecutan. Las entidades del modelo que todavía no tienen
+    exposición HTTP y las funcionalidades futuras se documentan en la extensión
+    `x-modelo-plan`, cada una marcada `(plan)`; no se agregan a `paths` para no
+    presentarlas como operativas.
+
+    Las entidades `Usuario` y `Cuenta` están en `x-modelo-plan` con esquemas
+    inline porque no se devuelven por HTTP. Si se agregaran a
+    `components/schemas` sin referencias, Redocly emitiría la advertencia
+    `no-unused-components`.
 
     ## Diferencias relevantes con la ficha del Hito 1
 
     - `PATCH /reservas/{id}/estado` es solo para administrador y la transición
       prohibida responde `422 transicion_invalida`, no `400`.
     - `POST /reservas` no acepta ni documenta `requiere_comprobante`; el servidor
-      actual no tiene ese campo.
+      actual no tiene ese campo. Se lista como `(plan)` en `x-modelo-plan`.
     - Las fechas y horas son cadenas no vacías; el servidor no valida formato,
       solapamiento por `HoraFin` ni calendario.
     - `GET /partidos/{id}` solo exige un token válido: no resuelve el vínculo de
@@ -90,6 +97,148 @@ tags:
     description: Partidos creados a partir de una reserva confirmada.
   - name: Inscripciones
     description: Inscripción de clientes a un partido con código de invitación.
+
+x-modelo-plan:
+  descripcion: |
+    Entidades del modelo que todavía no tienen exposición HTTP y funcionalidades
+    planificadas. Todo lo de esta sección está marcado `(plan)`: no son
+    operaciones de `paths` ni deben consumirse como endpoints operativos.
+  entidades:
+    Usuario:
+      descripcion: |
+        Entidad del modelo de negocio que ya existe en el código y en la base.
+        Su exposición HTTP está planificada `(plan)`: todavía no tiene endpoints
+        propios. No se devuelve en las respuestas actuales;
+        `Cancha.AdministradorID` y `Reserva.ClienteID` solo guardan la
+        referencia por ID.
+      esquema:
+        type: object
+        additionalProperties: false
+        required:
+          - ID
+          - Nombre
+          - Email
+          - Rol
+        properties:
+          ID:
+            type: integer
+            format: int64
+            minimum: 1
+            description: (plan) Identificador del usuario de negocio.
+          Nombre:
+            type: string
+            description: (plan) Nombre visible del usuario.
+          Email:
+            type: string
+            description: |
+              (plan) Correo del usuario. El modelo actual no valida su formato
+              ni declara una restricción de unicidad.
+          Rol:
+            type: string
+            enum:
+              - cliente
+              - administrador
+            description: (plan) Rol del usuario de negocio.
+    Cuenta:
+      descripcion: |
+        Entidad interna de autenticación que ya existe en el código y en la
+        base. Solo se usa en `POST /login` para validar credenciales y emitir el
+        token; su exposición HTTP está planificada `(plan)` y no se devuelve en
+        las respuestas actuales. El hash de la contraseña se omite
+        deliberadamente y no debe exponerse en ningún esquema público.
+      esquema:
+        type: object
+        additionalProperties: false
+        required:
+          - ID
+          - Usuario
+          - Rol
+        properties:
+          ID:
+            type: integer
+            format: int64
+            minimum: 1
+            description: (plan) Identificador de la cuenta.
+          Usuario:
+            type: string
+            description: (plan) Nombre de inicio de sesión; es único.
+          Rol:
+            type: string
+            enum:
+              - cliente
+              - administrador
+            description: (plan) Rol de la cuenta.
+          UsuarioID:
+            type:
+              - integer
+              - "null"
+            format: int64
+            minimum: 1
+            description: |
+              (plan) Vínculo opcional con el usuario de negocio. Puede ser
+              `null` cuando la cuenta no está vinculada.
+  funcionalidades_planificadas:
+    - nombre: Exposición HTTP de Usuario
+      estado: (plan)
+      descripcion: |
+        (plan) No existen rutas `/usuarios` ni respuestas que devuelvan el
+        objeto Usuario completo; solo se referencian sus IDs.
+    - nombre: Exposición HTTP de Cuenta
+      estado: (plan)
+      descripcion: |
+        (plan) No existe un CRUD de cuentas ni una respuesta que devuelva una
+        Cuenta. `POST /login` solo devuelve el token.
+    - nombre: CRUD de horarios
+      estado: (plan)
+      descripcion: |
+        (plan) Los horarios se leen anidados en `GET /canchas`; no hay rutas
+        para crearlos, editarlos o eliminarlos.
+    - nombre: Reportes de ingresos
+      estado: (plan)
+      descripcion: |
+        (plan) No existe una ruta de reportes ni cálculos de ingresos.
+    - nombre: Endpoints propios de pagos
+      estado: (plan)
+      descripcion: |
+        (plan) Los pagos se crean o actualizan como efecto de
+        `PATCH /reservas/{id}/estado`; no hay rutas `/pagos`.
+  campos_planificados:
+    - entidad: Usuario
+      campo: Telefono
+      estado: (plan)
+      descripcion: |
+        (plan) Aparece en la ficha del negocio, pero no existe en
+        `internal/usuarios/modelos.go` ni se devuelve por HTTP.
+    - entidad: Usuario
+      campo: ContrasenaHash
+      estado: (plan)
+      descripcion: |
+        (plan) Aparece en la ficha del negocio, pero no existe en el modelo
+        actual. Es un dato interno y no debe exponerse en respuestas públicas.
+    - entidad: Usuario
+      campo: CreadoEn
+      estado: (plan)
+      descripcion: |
+        (plan) Aparece en la ficha del negocio, pero no existe en el modelo
+        actual.
+    - entidad: Reserva
+      campo: RequiereComprobante
+      estado: (plan)
+      descripcion: |
+        (plan) Aparece en la ficha del negocio, pero el servidor no lo acepta
+        ni lo devuelve. `POST /reservas` no lo recibe.
+    - entidad: Reserva
+      campo: CreadoEn
+      estado: (plan)
+      descripcion: |
+        (plan) Aparece en la ficha del negocio, pero no existe en el modelo
+        actual.
+    - entidad: Pago
+      campo: PagadoEn
+      estado: (plan)
+      descripcion: |
+        (plan) Aparece en la ficha del negocio, pero no existe en el modelo
+        actual.
 
 paths:
   /login:
@@ -779,8 +928,9 @@ paths:
         consultar cualquier partido. Devuelve un objeto con `partido`,
         `inscriptos` y `cupos_restantes`.
 
-        Cualquier error al leer el partido se traduce en
-        `404 no_encontrado`; no hay un `500 error_base` propio de este manejador.
+        Si el partido no existe, responde `404 no_encontrado`. Un fallo de base
+        de datos al leer el partido o al contar sus inscripciones responde
+        `500 error_base`.
       operationId: obtenerPartido
       x-required-role: cualquier_sesion
       parameters:
@@ -1688,9 +1838,10 @@ components:
 
     PartidoNoEncontrado:
       description: |
-        No existe un partido con ese id (`no_encontrado`). En `GET /partidos/{id}`
-        cualquier error de lectura se traduce a este mismo `404`. Si la ruta no
-        está registrada, el router responde `ruta_inexistente`.
+        No existe un partido con ese id (`no_encontrado`). Si la ruta no está
+        registrada, el router responde `ruta_inexistente`. Los fallos de base de
+        datos no se confunden con este `404`: el manejador responde
+        `500 error_base`.
       content:
         application/json:
           schema:
