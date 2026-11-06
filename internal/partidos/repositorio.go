@@ -1,20 +1,13 @@
 package partidos
 
 import (
+	"errors"
+
 	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/inscripcion"
 	"canchas-sinteticas/internal/reservas"
 )
-
-// Repositorio es la parte de la base que necesita el manejador de partidos.
-type Repositorio interface {
-	ReservaPorID(id uint) (reservas.Reserva, error)
-	PartidoPorReservaID(reservaID uint) (Partido, error)
-	PartidoPorID(id uint) (Partido, error)
-	ContarInscripciones(partidoID uint) (int64, error)
-	CrearPartido(partido *Partido) error
-}
 
 // RepositorioGORM implementa Repositorio con PostgreSQL/GORM.
 type RepositorioGORM struct {
@@ -24,18 +17,30 @@ type RepositorioGORM struct {
 func (r RepositorioGORM) ReservaPorID(id uint) (reservas.Reserva, error) {
 	var reserva reservas.Reserva
 	err := r.DB.First(&reserva, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// El repositorio traduce el «no encontrado» de GORM al error de
+		// dominio de este módulo, para que el servicio no dependa del
+		// paquete reservas.
+		return reservas.Reserva{}, ErrReservaNoEncontrada
+	}
 	return reserva, err
 }
 
 func (r RepositorioGORM) PartidoPorReservaID(reservaID uint) (Partido, error) {
 	var partido Partido
 	err := r.DB.First(&partido, "reserva_id = ?", reservaID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Partido{}, ErrNoEncontrado
+	}
 	return partido, err
 }
 
 func (r RepositorioGORM) PartidoPorID(id uint) (Partido, error) {
 	var partido Partido
 	err := r.DB.First(&partido, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Partido{}, ErrNoEncontrado
+	}
 	return partido, err
 }
 

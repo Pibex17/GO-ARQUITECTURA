@@ -1,31 +1,21 @@
 package reservas
 
 import (
+	"errors"
+	"fmt"
+
 	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/canchas"
 )
 
-// FiltroReservas describe qué reservas puede ver una sesión. El manejador
+// FiltroReservas describe qué reservas puede ver una sesión. El servicio
 // decide los campos de propiedad; el repositorio solo arma la consulta.
 type FiltroReservas struct {
 	Estado               string
 	ClienteID            *uint // filtro adicional del administrador
 	PropietarioClienteID *uint // reservas de este cliente (rol cliente)
 	AdministradorID      *uint // reservas de las canchas de este administrador
-}
-
-// Repositorio es la parte de la base que necesita el manejador de reservas.
-// Es una interfaz para poder probar la autorización con dobles.
-type Repositorio interface {
-	CanchaPorID(id uint) (canchas.Cancha, error)
-	HayConflicto(canchaID uint, fecha, horaInicio string) (bool, error)
-	CrearReserva(reserva *Reserva) error
-	ListarReservas(filtro FiltroReservas) ([]Reserva, error)
-	ReservaPorID(id uint) (Reserva, error)
-	GuardarReserva(reserva *Reserva) error
-	CrearPago(pago *Pago) error
-	MarcarPagoSenaVerificado(reservaID uint) error
 }
 
 // RepositorioGORM implementa Repositorio con PostgreSQL/GORM.
@@ -36,9 +26,14 @@ type RepositorioGORM struct {
 func (r RepositorioGORM) CanchaPorID(id uint) (canchas.Cancha, error) {
 	var cancha canchas.Cancha
 	err := r.DB.First(&cancha, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return canchas.Cancha{}, canchas.ErrNoEncontrada
+	}
 	return cancha, err
 }
 
+// HayConflicto es una consulta de persistencia: cuenta las reservas que
+// siguen en pie para la misma cancha, fecha y hora de inicio.
 func (r RepositorioGORM) HayConflicto(canchaID uint, fecha, horaInicio string) (bool, error) {
 	var enConflicto int64
 	err := r.DB.Model(&Reserva{}).
@@ -79,19 +74,36 @@ func (r RepositorioGORM) ListarReservas(filtro FiltroReservas) ([]Reserva, error
 func (r RepositorioGORM) ReservaPorID(id uint) (Reserva, error) {
 	var reserva Reserva
 	err := r.DB.Preload("Pagos").First(&reserva, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Reserva{}, ErrNoEncontrada
+	}
 	return reserva, err
 }
 
-func (r RepositorioGORM) GuardarReserva(reserva *Reserva) error {
-	return r.DB.Save(reserva).Error
-}
-
-func (r RepositorioGORM) CrearPago(pago *Pago) error {
-	return r.DB.Create(pago).Error
-}
-
-func (r RepositorioGORM) MarcarPagoSenaVerificado(reservaID uint) error {
-	return r.DB.Model(&Pago{}).
-		Where("reserva_id = ? AND tipo = ? AND estado = ?", reservaID, "sena", "pendiente").
-		Update("estado", "verificado").Error
+// AplicarCambioEstado guarda, en una sola transacción, el pago nuevo (si
+// corresponde), la verificación de la seña (si corresponde) y el estado de
+// la reserva. Así no queda un pago sin su reserva ni al revés.
+func (r RepositorioGORM) AplicarCambioEstado(
+	reserva *Reserva, pago *Pago, verificarPago bool,
+) error {
+	err := r.DB.Transaction(func(tx *gorm.DB) error {
+		if pago != nil {
+			if err := tx.Create(pago).Error; err != nil {
+				return fmt.Errorf("%w: %v", ErrPagoNoRegistrado, err)
+			}
+		}
+		if verificarPago {
+			if err := tx.Model(&Pago{}).
+				Where("reserva_id = ? AND tipo = ? AND estado = ?",
+					reserva.ID, "sena", "pendiente").
+				Update("estado", "verificado").Error; err != nil {
+				return fmt.Errorf("%w: %v", ErrPagoNoVerificado, err)
+			}
+		}
+		if err := tx.Save(reserva).Error; err != nil {
+			return fmt.Errorf("%w: %v", ErrReservaNoGuardada, err)
+		}
+		return nil
+	})
+	return err
 }

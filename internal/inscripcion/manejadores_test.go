@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/sesion"
 	"canchas-sinteticas/internal/usuarios"
@@ -15,11 +14,14 @@ import (
 
 var tokensDePrueba = sesion.NuevosTokens("secreto-solo-de-las-pruebas-inscripcion")
 
-// enrutador arma el servidor de prueba SIN base de datos (DB: nil).
-// Las pruebas de autenticación y rol responden antes de tocar m.DB.
+// enrutador arma el servidor de prueba sin repositorio. Sirve para las
+// pruebas que responden antes de llegar al servicio (401, 403, 400).
 func enrutador() http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{DB: nil}).Rutas(r, tokensDePrueba)
+	(&Manejador{
+		Servicio: NuevoServicio(nil),
+		Vinculos: vinculosFalsos{usuario: usuarios.Usuario{ID: 2, Rol: sesion.RolCliente}},
+	}).Rutas(r, tokensDePrueba)
 	return r
 }
 
@@ -117,7 +119,7 @@ func (r *repoInscripcionFalso) PartidoPorID(uint) (Partido, error) {
 		return Partido{}, r.errPartido
 	}
 	if r.partido.ID == 0 {
-		return Partido{}, gorm.ErrRecordNotFound
+		return Partido{}, ErrNoEncontrado
 	}
 	return r.partido, nil
 }
@@ -129,7 +131,7 @@ func (r *repoInscripcionFalso) InscripcionPorPartidoYJugador(uint, uint) (Inscri
 	if r.existente != nil {
 		return *r.existente, nil
 	}
-	return Inscripcion{}, gorm.ErrRecordNotFound
+	return Inscripcion{}, ErrNoEncontrado
 }
 
 func (r *repoInscripcionFalso) ContarInscripciones(uint) (int64, error) {
@@ -147,7 +149,7 @@ func (r *repoInscripcionFalso) CrearInscripcion(inscripcion *Inscripcion) error 
 
 func enrutadorCon(repo Repositorio, vinculos sesion.ResolutorVinculos) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Repo: repo, Vinculos: vinculos}).Rutas(r, tokensDePrueba)
+	(&Manejador{Servicio: NuevoServicio(repo), Vinculos: vinculos}).Rutas(r, tokensDePrueba)
 	return r
 }
 

@@ -5,34 +5,31 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/respuesta"
 	"canchas-sinteticas/internal/sesion"
 )
 
-// Manejador guarda la conexión y las piezas sustituibles por dobles.
-type Manejador struct {
-	DB       *gorm.DB
-	Repo     Repositorio
-	Vinculos sesion.ResolutorVinculos
+// ServicioInscripciones es el contrato que el transporte necesita del caso
+// de uso. El manejador depende de esta abstracción, no de la implementación.
+type ServicioInscripciones interface {
+	Crear(partidoID, jugadorID uint, entrada EntradaCrear) (Inscripcion, error)
 }
 
-func (m *Manejador) repositorio() Repositorio {
-	if m.Repo != nil {
-		return m.Repo
-	}
-	return RepositorioGORM{DB: m.DB}
+// Manejador es la capa de transporte: traduce HTTP al servicio de
+// inscripciones. No conoce GORM ni crea repositorios.
+type Manejador struct {
+	Servicio ServicioInscripciones
+	Vinculos sesion.ResolutorVinculos
 }
 
 func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 	if m.Vinculos != nil {
 		return m.Vinculos
 	}
-	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
+	return sesion.Vinculos{}
 }
 
 // Rutas: inscribirse es solo del cliente según la tabla de roles de la
@@ -59,6 +56,41 @@ func responderSinVinculo(w http.ResponseWriter) {
 		"cuenta_sin_vinculo", "la cuenta no está vinculada a un usuario de negocio")
 }
 
+func responderError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrDatosInvalidos):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"datos_invalidos", ErrDatosInvalidos.Error())
+	case errors.Is(err, ErrNoEncontrado):
+		respuesta.Error(w, http.StatusNotFound,
+			"no_encontrado", ErrNoEncontrado.Error())
+	case errors.Is(err, ErrCodigoInvalido):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"codigo_invalido", ErrCodigoInvalido.Error())
+	case errors.Is(err, ErrYaInscripto):
+		respuesta.Error(w, http.StatusConflict,
+			"ya_inscripto", ErrYaInscripto.Error())
+	case errors.Is(err, ErrPartidoLleno):
+		respuesta.Error(w, http.StatusConflict,
+			"partido_lleno", ErrPartidoLleno.Error())
+	case errors.Is(err, errLeyendoPartido):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errLeyendoPartido.Error())
+	case errors.Is(err, errComprobandoInscripcion):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errComprobandoInscripcion.Error())
+	case errors.Is(err, errContandoInscripciones):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errContandoInscripciones.Error())
+	case errors.Is(err, errGuardandoInscripcion):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errGuardandoInscripcion.Error())
+	default:
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", "no se pudo procesar la solicitud")
+	}
+}
+
 // POST /partidos/{id}/inscripciones
 func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 	id, ok := leerID(w, r)
@@ -76,11 +108,6 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if entrada.CodigoInvitacion == "" {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "datos_invalidos", "codigo_invitacion es obligatorio")
-		return
-	}
-
 	s, ok := sesionActual(w, r)
 	if !ok {
 		return
@@ -91,54 +118,13 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verificar que el partido existe.
-	partido, err := m.repositorio().PartidoPorID(id)
+	nueva, err := m.Servicio.Crear(id, usuario.ID, EntradaCrear{
+		CodigoInvitacion: entrada.CodigoInvitacion,
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respuesta.Error(w, http.StatusNotFound, "no_encontrado", "no existe un partido con ese id")
-			return
-		}
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo leer el partido")
+		responderError(w, err)
 		return
 	}
-
-	// Verificar que el código coincida.
-	if partido.CodigoInvitacion != entrada.CodigoInvitacion {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "codigo_invalido", "el código de invitación no es válido")
-		return
-	}
-
-	// Verificar que el jugador autenticado no esté ya inscrito.
-	if _, err := m.repositorio().InscripcionPorPartidoYJugador(id, usuario.ID); err == nil {
-		respuesta.Error(w, http.StatusConflict, "ya_inscripto", "el jugador ya está inscrito en este partido")
-		return
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo comprobar la inscripción")
-		return
-	}
-
-	// Verificar que haya cupo.
-	inscripciones, err := m.repositorio().ContarInscripciones(id)
-	if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo contar los inscriptos")
-		return
-	}
-	if int(inscripciones) >= partido.CupoMaximo {
-		respuesta.Error(w, http.StatusConflict, "partido_lleno", "el partido ya no tiene cupos disponibles")
-		return
-	}
-
-	nueva := Inscripcion{
-		PartidoID: id,
-		JugadorID: usuario.ID, // el dueño es el usuario vinculado a la cuenta
-		CreadoEn:  time.Now(),
-	}
-
-	if err := m.repositorio().CrearInscripcion(&nueva); err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo guardar la inscripción")
-		return
-	}
-
 	respuesta.Exito(w, http.StatusCreated, nueva)
 }
 

@@ -7,34 +7,32 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/respuesta"
 	"canchas-sinteticas/internal/sesion"
-	"canchas-sinteticas/internal/usuarios"
 )
 
-// Manejador guarda la conexión y las piezas que se pueden sustituir en las
-// pruebas. Si Repo o Vinculos quedan en nil, se usan las implementaciones
-// GORM sobre DB; así main.go no cambia y las pruebas pueden usar dobles.
-type Manejador struct {
-	DB       *gorm.DB
-	Repo     Repositorio
-	Vinculos sesion.ResolutorVinculos
+// ServicioReservas es el contrato que el transporte necesita del caso de uso.
+// El manejador depende de esta abstracción, no de la implementación concreta.
+type ServicioReservas interface {
+	Crear(clienteID uint, entrada EntradaCrear) (Reserva, error)
+	Listar(rol string, usuarioID uint, estado string, clienteID *uint) ([]Reserva, error)
+	Obtener(id uint, rol string, usuarioID uint) (Reserva, error)
+	CambiarEstado(id, administradorID uint, nuevoEstado, metodo, comprobanteURL string) (Reserva, error)
 }
 
-func (m *Manejador) repositorio() Repositorio {
-	if m.Repo != nil {
-		return m.Repo
-	}
-	return RepositorioGORM{DB: m.DB}
+// Manejador es la capa de transporte: traduce HTTP al servicio de reservas.
+// No conoce GORM ni crea repositorios.
+type Manejador struct {
+	Servicio ServicioReservas
+	Vinculos sesion.ResolutorVinculos
 }
 
 func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 	if m.Vinculos != nil {
 		return m.Vinculos
 	}
-	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
+	return sesion.Vinculos{}
 }
 
 // Rutas registra aquí las rutas de este paquete, para no llenar main.go.
@@ -80,6 +78,69 @@ func responderSinVinculo(w http.ResponseWriter) {
 		"cuenta_sin_vinculo", "la cuenta no está vinculada a un usuario de negocio")
 }
 
+func responderError(w http.ResponseWriter, err error) {
+	var transicion ErrorTransicion
+	switch {
+	case errors.As(err, &transicion):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"transicion_invalida", transicion.Error())
+	case errors.Is(err, ErrDatosInvalidos):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"datos_invalidos", ErrDatosInvalidos.Error())
+	case errors.Is(err, ErrCanchaInvalida):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"cancha_invalida", ErrCanchaInvalida.Error())
+	case errors.Is(err, ErrHorarioOcupado):
+		respuesta.Error(w, http.StatusConflict,
+			"horario_ocupado", ErrHorarioOcupado.Error())
+	case errors.Is(err, ErrNoEncontrada):
+		respuesta.Error(w, http.StatusNotFound,
+			"no_encontrado", ErrNoEncontrada.Error())
+	case errors.Is(err, ErrPermisoDenegado):
+		respuesta.Error(w, http.StatusForbidden,
+			"permiso_denegado", ErrPermisoDenegado.Error())
+	case errors.Is(err, ErrEstadoInvalido):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"estado_invalido", ErrEstadoInvalido.Error())
+	case errors.Is(err, ErrRolNoPermitido):
+		respuesta.Error(w, http.StatusForbidden,
+			"permiso_denegado", ErrRolNoPermitido.Error())
+	case errors.Is(err, ErrPagoNoRegistrado):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", ErrPagoNoRegistrado.Error())
+	case errors.Is(err, ErrPagoNoVerificado):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", ErrPagoNoVerificado.Error())
+	case errors.Is(err, ErrReservaNoGuardada):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", ErrReservaNoGuardada.Error())
+	case errors.Is(err, errLeyendoCancha):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errLeyendoCancha.Error())
+	case errors.Is(err, errComprobandoHorario):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errComprobandoHorario.Error())
+	case errors.Is(err, errGuardandoReserva):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errGuardandoReserva.Error())
+	case errors.Is(err, errListandoReservas):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errListandoReservas.Error())
+	case errors.Is(err, errLeyendoReserva):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errLeyendoReserva.Error())
+	case errors.Is(err, errComprobandoPropiedad):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errComprobandoPropiedad.Error())
+	case errors.Is(err, errLeyendoActualizada):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errLeyendoActualizada.Error())
+	default:
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", "no se pudo procesar la solicitud")
+	}
+}
+
 // POST /reservas
 func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 	// 1. Leer el JSON. El cuerpo no decide al dueño: no aceptamos
@@ -96,15 +157,7 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Validar los datos obligatorios de la reserva.
-	if entrada.CanchaID == 0 ||
-		entrada.Fecha == "" || entrada.HoraInicio == "" || entrada.HoraFin == "" {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"datos_invalidos", "cancha_id, fecha, hora_inicio y hora_fin son obligatorios")
-		return
-	}
-
-	// 3. El dueño se deriva de la cuenta autenticada.
+	// 2. El dueño se deriva de la cuenta autenticada.
 	s, ok := sesionActual(w, r)
 	if !ok {
 		return
@@ -115,51 +168,14 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- desde aquí hace falta la base de datos ---
-
-	// La cancha tiene que existir y estar activa.
-	cancha, err := m.repositorio().CanchaPorID(entrada.CanchaID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respuesta.Error(w, http.StatusUnprocessableEntity,
-				"cancha_invalida", "no existe una cancha activa con ese id")
-			return
-		}
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo leer la cancha")
-		return
-	}
-	if !cancha.Activa {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"cancha_invalida", "no existe una cancha activa con ese id")
-		return
-	}
-
-	// El horario no puede estar ya tomado por una reserva que sigue en pie.
-	enConflicto, err := m.repositorio().HayConflicto(
-		entrada.CanchaID, entrada.Fecha, entrada.HoraInicio)
-	if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo comprobar el horario")
-		return
-	}
-	if enConflicto {
-		respuesta.Error(w, http.StatusConflict,
-			"horario_ocupado", "ya existe una reserva para esa cancha, fecha y hora")
-		return
-	}
-
-	reserva := Reserva{
+	reserva, err := m.Servicio.Crear(usuario.ID, EntradaCrear{
 		CanchaID:   entrada.CanchaID,
-		ClienteID:  usuario.ID, // el dueño es el usuario vinculado a la cuenta
 		Fecha:      entrada.Fecha,
 		HoraInicio: entrada.HoraInicio,
 		HoraFin:    entrada.HoraFin,
-		Estado:     "pendiente", // el servidor decide el estado inicial
-	}
-	if err := m.repositorio().CrearReserva(&reserva); err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo guardar la reserva")
+	})
+	if err != nil {
+		responderError(w, err)
 		return
 	}
 	respuesta.Exito(w, http.StatusCreated, reserva)
@@ -179,15 +195,8 @@ func (m *Manejador) listar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filtro := FiltroReservas{Estado: r.URL.Query().Get("estado")}
-	switch s.Rol {
-	case sesion.RolCliente:
-		clienteID := usuario.ID
-		filtro.PropietarioClienteID = &clienteID
-	case sesion.RolAdministrador:
-		administradorID := usuario.ID
-		filtro.AdministradorID = &administradorID
-
+	var clienteID *uint
+	if s.Rol == sesion.RolAdministrador {
 		if texto := r.URL.Query().Get("cliente_id"); texto != "" {
 			n, err := strconv.Atoi(texto)
 			if err != nil || n <= 0 {
@@ -195,19 +204,15 @@ func (m *Manejador) listar(w http.ResponseWriter, r *http.Request) {
 					"id_invalido", "el cliente_id debe ser un entero positivo")
 				return
 			}
-			clienteID := uint(n)
-			filtro.ClienteID = &clienteID
+			id := uint(n)
+			clienteID = &id
 		}
-	default:
-		respuesta.Error(w, http.StatusForbidden,
-			"permiso_denegado", "su rol no tiene permiso para esta acción")
-		return
 	}
 
-	lista, err := m.repositorio().ListarReservas(filtro)
+	lista, err := m.Servicio.Listar(
+		s.Rol, usuario.ID, r.URL.Query().Get("estado"), clienteID)
 	if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo listar las reservas")
+		responderError(w, err)
 		return
 	}
 	respuesta.Exito(w, http.StatusOK, lista)
@@ -230,53 +235,12 @@ func (m *Manejador) obtener(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reserva, err := m.repositorio().ReservaPorID(id)
+	reserva, err := m.Servicio.Obtener(id, s.Rol, usuario.ID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respuesta.Error(w, http.StatusNotFound,
-				"no_encontrado", "no existe una reserva con ese id")
-			return
-		}
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo leer la reserva")
+		responderError(w, err)
 		return
 	}
-
-	permitido, err := m.puedeAcceder(s, usuario, reserva)
-	if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo comprobar la propiedad de la reserva")
-		return
-	}
-	if !permitido {
-		respuesta.Error(w, http.StatusForbidden,
-			"permiso_denegado", "la reserva no es suya ni de sus canchas")
-		return
-	}
-
 	respuesta.Exito(w, http.StatusOK, reserva)
-}
-
-// puedeAcceder aplica la regla de propiedad de la ficha: el cliente solo
-// ve sus reservas; el administrador solo las de sus canchas.
-func (m *Manejador) puedeAcceder(
-	s sesion.Sesion, usuario usuarios.Usuario, reserva Reserva,
-) (bool, error) {
-	switch s.Rol {
-	case sesion.RolCliente:
-		return reserva.ClienteID == usuario.ID, nil
-	case sesion.RolAdministrador:
-		cancha, err := m.repositorio().CanchaPorID(reserva.CanchaID)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return false, nil // no se puede probar que sea suya
-		}
-		if err != nil {
-			return false, err
-		}
-		return cancha.AdministradorID == usuario.ID, nil
-	default:
-		return false, nil
-	}
 }
 
 type entradaCambiarEstado struct {
@@ -319,82 +283,12 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 			"cuerpo_malformado", "el cuerpo debe ser JSON")
 		return
 	}
-	// 3. Validar el estado pedido. Esta SÍ responde antes de consultar el repositorio.
-	if !estadosValidos[entrada.NuevoEstado] {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"estado_invalido", "ese estado no existe")
-		return
-	}
 
-	// --- desde aquí hace falta la base de datos ---
-
-	reserva, err := m.repositorio().ReservaPorID(id)
+	// 3. El servicio valida el estado antes de consultar el repositorio.
+	actualizada, err := m.Servicio.CambiarEstado(
+		id, usuario.ID, entrada.NuevoEstado, entrada.Metodo, entrada.ComprobanteURL)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respuesta.Error(w, http.StatusNotFound,
-				"no_encontrado", "no existe una reserva con ese id")
-			return
-		}
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo leer la reserva")
-		return
-	}
-
-	// 4. El administrador solo puede cambiar reservas de sus canchas.
-	cancha, err := m.repositorio().CanchaPorID(reserva.CanchaID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respuesta.Error(w, http.StatusForbidden,
-				"permiso_denegado", "la reserva no es suya ni de sus canchas")
-			return
-		}
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo comprobar la cancha de la reserva")
-		return
-	}
-	if cancha.AdministradorID != usuario.ID {
-		respuesta.Error(w, http.StatusForbidden,
-			"permiso_denegado", "la reserva no es suya ni de sus canchas")
-		return
-	}
-
-	// 5. La transición pedida tiene que estar permitida (Sección 5 de la ficha).
-	// El Hito 2 exige 422 para la transición prohibida.
-	if !transicionPermitida(reserva.Estado, entrada.NuevoEstado) {
-		respuesta.Error(w, http.StatusUnprocessableEntity,
-			"transicion_invalida", "no se puede pasar de "+reserva.Estado+" a "+entrada.NuevoEstado)
-		return
-	}
-
-	// 6. Efectos según a qué estado se pasa.
-	switch entrada.NuevoEstado {
-	case "pago_por_verificar":
-		pago := NuevoPagoSena(reserva.ID, cancha.PrecioHora,
-			entrada.Metodo, entrada.ComprobanteURL)
-		if err := m.repositorio().CrearPago(&pago); err != nil {
-			respuesta.Error(w, http.StatusInternalServerError,
-				"error_base", "no se pudo registrar el pago")
-			return
-		}
-	case "confirmada":
-		if err := m.repositorio().MarcarPagoSenaVerificado(reserva.ID); err != nil {
-			respuesta.Error(w, http.StatusInternalServerError,
-				"error_base", "no se pudo verificar el pago")
-			return
-		}
-	}
-
-	reserva.Estado = entrada.NuevoEstado
-	if err := m.repositorio().GuardarReserva(&reserva); err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo actualizar la reserva")
-		return
-	}
-
-	actualizada, err := m.repositorio().ReservaPorID(reserva.ID)
-	if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo leer la reserva actualizada")
+		responderError(w, err)
 		return
 	}
 	respuesta.Exito(w, http.StatusOK, actualizada)

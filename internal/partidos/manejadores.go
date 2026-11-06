@@ -1,39 +1,36 @@
 package partidos
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/respuesta"
 	"canchas-sinteticas/internal/sesion"
 )
 
-// Manejador guarda la conexión y las piezas sustituibles por dobles.
-type Manejador struct {
-	DB       *gorm.DB
-	Repo     Repositorio
-	Vinculos sesion.ResolutorVinculos
+// ServicioPartidos es el contrato que el transporte necesita del caso de uso.
+// El manejador depende de esta abstracción, no de la implementación concreta.
+type ServicioPartidos interface {
+	Crear(clienteID uint, entrada EntradaCrear) (Partido, error)
+	Obtener(id uint) (Detalle, error)
 }
 
-func (m *Manejador) repositorio() Repositorio {
-	if m.Repo != nil {
-		return m.Repo
-	}
-	return RepositorioGORM{DB: m.DB}
+// Manejador es la capa de transporte: traduce HTTP al servicio de partidos.
+// No conoce GORM ni crea repositorios.
+type Manejador struct {
+	Servicio ServicioPartidos
+	Vinculos sesion.ResolutorVinculos
 }
 
 func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 	if m.Vinculos != nil {
 		return m.Vinculos
 	}
-	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
+	return sesion.Vinculos{}
 }
 
 // Rutas: el cliente crea el partido de su reserva; el detalle lo puede
@@ -70,15 +67,48 @@ func responderSinVinculo(w http.ResponseWriter) {
 		"cuenta_sin_vinculo", "la cuenta no está vinculada a un usuario de negocio")
 }
 
-// generarCodigoInvitacion genera un código único de 6 caracteres.
-func generarCodigoInvitacion() string {
-	const caracteres = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // sin 0/O, 1/I/L
-	b := make([]byte, 6)
-	rand.Read(b)
-	for i := range b {
-		b[i] = caracteres[int(b[i])%len(caracteres)]
+func responderError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrDatosInvalidos):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"datos_invalidos", ErrDatosInvalidos.Error())
+	case errors.Is(err, ErrReservaNoEncontrada):
+		respuesta.Error(w, http.StatusNotFound,
+			"no_encontrado", ErrReservaNoEncontrada.Error())
+	case errors.Is(err, ErrReservaAjena):
+		respuesta.Error(w, http.StatusForbidden,
+			"permiso_denegado", ErrReservaAjena.Error())
+	case errors.Is(err, ErrReservaNoConfirmada):
+		respuesta.Error(w, http.StatusUnprocessableEntity,
+			"reserva_no_confirmada", ErrReservaNoConfirmada.Error())
+	case errors.Is(err, ErrPartidoExistente):
+		respuesta.Error(w, http.StatusConflict,
+			"partido_existente", ErrPartidoExistente.Error())
+	case errors.Is(err, ErrNoEncontrado):
+		respuesta.Error(w, http.StatusNotFound,
+			"no_encontrado", ErrNoEncontrado.Error())
+	case errors.Is(err, errLeyendoReserva):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errLeyendoReserva.Error())
+	case errors.Is(err, errComprobandoPartido):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errComprobandoPartido.Error())
+	case errors.Is(err, errGenerandoCodigo):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errGenerandoCodigo.Error())
+	case errors.Is(err, errGuardandoPartido):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errGuardandoPartido.Error())
+	case errors.Is(err, errLeyendoPartido):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errLeyendoPartido.Error())
+	case errors.Is(err, errContandoInscripcion):
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", errContandoInscripcion.Error())
+	default:
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", "no se pudo procesar la solicitud")
 	}
-	return string(b)
 }
 
 // POST /partidos
@@ -93,11 +123,6 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if entrada.ReservaID == 0 || entrada.Nombre == "" || entrada.CupoMaximo <= 0 {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "datos_invalidos", "reserva_id, nombre y cupo_maximo son obligatorios")
-		return
-	}
-
 	// El dueño del partido es el cliente autenticado, no un ID del cuerpo.
 	s, ok := sesionActual(w, r)
 	if !ok {
@@ -109,49 +134,15 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verificar que la reserva existe y que pertenece al cliente autenticado.
-	reserva, err := m.repositorio().ReservaPorID(entrada.ReservaID)
+	partido, err := m.Servicio.Crear(usuario.ID, EntradaCrear{
+		ReservaID:  entrada.ReservaID,
+		Nombre:     entrada.Nombre,
+		CupoMaximo: entrada.CupoMaximo,
+	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			respuesta.Error(w, http.StatusNotFound, "no_encontrado", "no existe una reserva con ese id")
-			return
-		}
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo leer la reserva")
+		responderError(w, err)
 		return
 	}
-	if reserva.ClienteID != usuario.ID {
-		respuesta.Error(w, http.StatusForbidden, "permiso_denegado", "la reserva no es suya")
-		return
-	}
-
-	// Verificar que la reserva está confirmada.
-	if reserva.Estado != "confirmada" {
-		respuesta.Error(w, http.StatusUnprocessableEntity, "reserva_no_confirmada", "solo se puede crear un partido desde una reserva confirmada")
-		return
-	}
-
-	// Verificar que no exista ya un partido para esa reserva.
-	if _, err := m.repositorio().PartidoPorReservaID(entrada.ReservaID); err == nil {
-		respuesta.Error(w, http.StatusConflict, "partido_existente", "ya existe un partido para esa reserva")
-		return
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo comprobar el partido")
-		return
-	}
-
-	partido := Partido{
-		ReservaID:        entrada.ReservaID,
-		Nombre:           entrada.Nombre,
-		CupoMaximo:       entrada.CupoMaximo,
-		CodigoInvitacion: generarCodigoInvitacion(),
-		CreadoEn:         time.Now(),
-	}
-
-	if err := m.repositorio().CrearPartido(&partido); err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo guardar el partido")
-		return
-	}
-
 	respuesta.Exito(w, http.StatusCreated, partido)
 }
 
@@ -162,17 +153,10 @@ func (m *Manejador) obtener(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partido, err := m.repositorio().PartidoPorID(id)
+	detalle, err := m.Servicio.Obtener(id)
 	if err != nil {
-		respuesta.Error(w, http.StatusNotFound, "no_encontrado", "no existe un partido con ese id")
+		responderError(w, err)
 		return
 	}
-
-	inscripciones, _ := m.repositorio().ContarInscripciones(partido.ID)
-
-	respuesta.Exito(w, http.StatusOK, map[string]any{
-		"partido":         partido,
-		"inscriptos":      inscripciones,
-		"cupos_restantes": partido.CupoMaximo - int(inscripciones),
-	})
+	respuesta.Exito(w, http.StatusOK, detalle)
 }

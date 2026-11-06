@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 )
 
 type repositorioFalso struct {
@@ -34,7 +33,8 @@ type respuestaDePrueba struct {
 
 func enrutadorDePrueba(repo RepositorioCuentas) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Cuentas: repo, Tokens: NuevosTokens(secretoDePrueba)}).Rutas(r)
+	servicio := NuevoServicio(repo, NuevosTokens(secretoDePrueba))
+	(&Manejador{Servicio: servicio}).Rutas(r)
 	return r
 }
 
@@ -173,7 +173,7 @@ func TestLoginConCuentaInexistenteResponde401(t *testing.T) {
 		strings.NewReader(`{"usuario": "nadie", "clave": "ana-2026"}`))
 	grabadora := httptest.NewRecorder()
 
-	enrutadorDePrueba(repositorioFalso{err: gorm.ErrRecordNotFound}).
+	enrutadorDePrueba(repositorioFalso{err: ErrCuentaNoEncontrada}).
 		ServeHTTP(grabadora, peticion)
 
 	verificarErrorDeLogin(t, grabadora, http.StatusUnauthorized, "credenciales_invalidas")

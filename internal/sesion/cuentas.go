@@ -6,7 +6,11 @@
 // con el usuario de negocio que corresponde a la cuenta.
 package sesion
 
-import "gorm.io/gorm"
+import (
+	"errors"
+
+	"gorm.io/gorm"
+)
 
 // Los dos roles del negocio, con el mismo texto que usa internal/usuarios.
 const (
@@ -29,11 +33,9 @@ func (Cuenta) TableName() string {
 	return "cuentas"
 }
 
-// RepositorioCuentas es lo único que el inicio de sesión necesita de la
-// base de datos. Una interfaz permite probar el manejador sin PostgreSQL.
-type RepositorioCuentas interface {
-	PorUsuario(usuario string) (Cuenta, error)
-}
+// ErrCuentaNoEncontrada traduce el «no encontrado» de la persistencia a un
+// error del paquete, para que el servicio no dependa de GORM.
+var ErrCuentaNoEncontrada = errors.New("la cuenta no existe")
 
 // RepositorioCuentasGORM implementa RepositorioCuentas con GORM.
 type RepositorioCuentasGORM struct {
@@ -41,9 +43,12 @@ type RepositorioCuentasGORM struct {
 }
 
 // PorUsuario busca una cuenta por su nombre de inicio de sesión.
-// Si no existe, devuelve gorm.ErrRecordNotFound.
+// Si no existe, devuelve ErrCuentaNoEncontrada.
 func (r RepositorioCuentasGORM) PorUsuario(usuario string) (Cuenta, error) {
 	var c Cuenta
 	err := r.DB.Where("usuario = ?", usuario).First(&c).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Cuenta{}, ErrCuentaNoEncontrada
+	}
 	return c, err
 }

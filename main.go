@@ -95,18 +95,35 @@ func nuevoEnrutador(db *gorm.DB, tokens *sesion.Tokens) http.Handler {
 			"metodo_no_permitido", "el método no está permitido en esta ruta")
 	})
 
-	// El guardia de sesión se crea antes de registrar las rutas de negocio:
+	// Composición explícita: se construyen los repositorios GORM, luego los
+	// servicios con esas interfaces y al final los manejadores HTTP. Las
+	// dependencias apuntan Transporte → Servicio → Repositorio.
+	vinculos := sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: db}}
+
+	// El guardia de sesión se registra antes de las rutas de negocio:
 	// todas lo reciben y deciden su nivel (sesión, solo cliente o solo
 	// administrador). POST /login se registra aparte, sin guardia.
-	(&canchas.Manejador{DB: db}).Rutas(r, tokens)
-	(&reservas.Manejador{DB: db}).Rutas(r, tokens)
-	(&partidos.Manejador{DB: db}).Rutas(r, tokens)
-	(&inscripcion.Manejador{DB: db}).Rutas(r, tokens)
+	(&canchas.Manejador{
+		Servicio: canchas.NuevoServicio(canchas.RepositorioGORM{DB: db}),
+		Vinculos: vinculos,
+	}).Rutas(r, tokens)
+	(&reservas.Manejador{
+		Servicio: reservas.NuevoServicio(reservas.RepositorioGORM{DB: db}),
+		Vinculos: vinculos,
+	}).Rutas(r, tokens)
+	(&partidos.Manejador{
+		Servicio: partidos.NuevoServicio(partidos.RepositorioGORM{DB: db}),
+		Vinculos: vinculos,
+	}).Rutas(r, tokens)
+	(&inscripcion.Manejador{
+		Servicio: inscripcion.NuevoServicio(inscripcion.RepositorioGORM{DB: db}),
+		Vinculos: vinculos,
+	}).Rutas(r, tokens)
 
 	// Sesión: POST /login es la única ruta pública.
 	(&sesion.Manejador{
-		Cuentas: sesion.RepositorioCuentasGORM{DB: db},
-		Tokens:  tokens,
+		Servicio: sesion.NuevoServicio(
+			sesion.RepositorioCuentasGORM{DB: db}, tokens),
 	}).Rutas(r)
 
 	return r

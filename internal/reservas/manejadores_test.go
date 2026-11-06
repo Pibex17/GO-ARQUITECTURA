@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/canchas"
 	"canchas-sinteticas/internal/sesion"
@@ -32,7 +31,7 @@ func (vinculosDelToken) UsuarioDe(s sesion.Sesion) (usuarios.Usuario, error) {
 // de la línea "desde aquí hace falta la base de datos".
 func enrutador() http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{DB: nil, Vinculos: vinculosDelToken{}}).Rutas(r, tokensDePrueba)
+	(&Manejador{Servicio: NuevoServicio(nil), Vinculos: vinculosDelToken{}}).Rutas(r, tokensDePrueba)
 	return r
 }
 
@@ -235,7 +234,7 @@ func TestClienteNoAlcanzaLaValidacionDeTransicion(t *testing.T) {
 // dentro del manejador, sin el guardia SoloRol de la ruta: el cliente debe
 // recibir 403 antes de que se valide el cuerpo o la transición.
 func TestCambiarEstadoRechazaElRolAntesDeLaTransicion(t *testing.T) {
-	manejador := &Manejador{DB: nil, Vinculos: vinculosDelToken{}}
+	manejador := &Manejador{Servicio: NuevoServicio(nil), Vinculos: vinculosDelToken{}}
 	r := chi.NewRouter()
 	r.With(tokensDePrueba.Autenticar).
 		Patch("/reservas/{id}/estado", manejador.cambiarEstado)
@@ -318,7 +317,7 @@ func (r *repoReservasFalso) CanchaPorID(id uint) (canchas.Cancha, error) {
 	}
 	cancha, ok := r.canchas[id]
 	if !ok {
-		return canchas.Cancha{}, gorm.ErrRecordNotFound
+		return canchas.Cancha{}, canchas.ErrNoEncontrada
 	}
 	return cancha, nil
 }
@@ -377,10 +376,27 @@ func (r *repoReservasFalso) ReservaPorID(id uint) (Reserva, error) {
 			return reserva, nil
 		}
 	}
-	return Reserva{}, gorm.ErrRecordNotFound
+	return Reserva{}, ErrNoEncontrada
 }
 
-func (r *repoReservasFalso) GuardarReserva(reserva *Reserva) error {
+// AplicarCambioEstado reproduce en memoria la transacción del repositorio
+// GORM: guarda el pago, verifica la seña y actualiza la reserva.
+func (r *repoReservasFalso) AplicarCambioEstado(
+	reserva *Reserva, pago *Pago, verificarPago bool,
+) error {
+	if pago != nil {
+		if r.errPago != nil {
+			return r.errPago
+		}
+		copia := *pago
+		r.pagoCreado = &copia
+	}
+	if verificarPago {
+		if r.errVerificar != nil {
+			return r.errVerificar
+		}
+		r.pagoVerificado = true
+	}
 	if r.errGuardar != nil {
 		return r.errGuardar
 	}
@@ -396,26 +412,9 @@ func (r *repoReservasFalso) GuardarReserva(reserva *Reserva) error {
 	return nil
 }
 
-func (r *repoReservasFalso) CrearPago(pago *Pago) error {
-	if r.errPago != nil {
-		return r.errPago
-	}
-	copia := *pago
-	r.pagoCreado = &copia
-	return nil
-}
-
-func (r *repoReservasFalso) MarcarPagoSenaVerificado(uint) error {
-	if r.errVerificar != nil {
-		return r.errVerificar
-	}
-	r.pagoVerificado = true
-	return nil
-}
-
 func enrutadorCon(repo Repositorio, vinculos sesion.ResolutorVinculos) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Repo: repo, Vinculos: vinculos}).Rutas(r, tokensDePrueba)
+	(&Manejador{Servicio: NuevoServicio(repo), Vinculos: vinculos}).Rutas(r, tokensDePrueba)
 	return r
 }
 

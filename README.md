@@ -73,7 +73,7 @@ go vet ./...
 go mod verify
 ```
 
-Las pruebas unitarias de los manejadores usan dobles deterministas y no necesitan PostgreSQL.
+Las pruebas unitarias de servicios y manejadores usan dobles deterministas y no necesitan PostgreSQL. Las de `internal/*/servicio_test.go` prueban las reglas de negocio con repositorios falsos; las de `internal/*/manejadores_test.go` prueban el transporte HTTP.
 
 La prueba de extremo a extremo está en `main_integracion_test.go` y lleva la etiqueta `//go:build integration`. Usa PostgreSQL real y una base desechable:
 
@@ -158,7 +158,7 @@ Notas que el contrato refleja porque son el comportamiento real del servidor:
     ├── config/                 # lee .env y variables del sistema
     ├── usuarios/               # Usuario (cliente/administrador)
     ├── sesion/                 # login, JWT, roles y vínculos de negocio
-    ├── canchas/                # Cancha, Horario + catálogo
+    ├── canchas/                # Cancha, Horario + servicio, repositorio y HTTP
     ├── reservas/               # Reserva, Pagos, máquina de estados y seña
     ├── partidos/               # Partido y detalle con cupos
     └── inscripcion/            # Inscripción a partidos

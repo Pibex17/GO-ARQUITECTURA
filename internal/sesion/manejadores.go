@@ -6,15 +6,20 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/respuesta"
 )
 
-// Manejador tiene la única ruta de este paquete: iniciar sesión.
+// ServicioSesion es el contrato que el transporte necesita del caso de uso.
+// El manejador depende de esta abstracción, no de la implementación concreta.
+type ServicioSesion interface {
+	Login(usuario, clave string) (string, error)
+}
+
+// Manejador es la capa de transporte del inicio de sesión: decodifica la
+// petición, llama al servicio y traduce el resultado a HTTP.
 type Manejador struct {
-	Cuentas RepositorioCuentas
-	Tokens  *Tokens
+	Servicio ServicioSesion
 }
 
 // Rutas registra aquí las rutas de este paquete, para no llenar main.go.
@@ -35,29 +40,12 @@ func (m *Manejador) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// El mismo mensaje para «no existe» y para «contraseña incorrecta»:
-	// quien prueba nombres al azar no averigua cuáles existen.
-	const noCoincide = "usuario o contraseña incorrectos"
-
-	cuenta, err := m.Cuentas.PorUsuario(pedido.Usuario)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	token, err := m.Servicio.Login(pedido.Usuario, pedido.Clave)
+	if errors.Is(err, ErrCredencialesInvalidas) {
 		respuesta.Error(w, http.StatusUnauthorized,
-			"credenciales_invalidas", noCoincide)
+			"credenciales_invalidas", ErrCredencialesInvalidas.Error())
 		return
 	}
-	if err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_interno", "no se pudo iniciar sesión")
-		return
-	}
-
-	if !ClaveCoincide(cuenta.ClaveHash, pedido.Clave) {
-		respuesta.Error(w, http.StatusUnauthorized,
-			"credenciales_invalidas", noCoincide)
-		return
-	}
-
-	token, err := m.Tokens.Emitir(cuenta)
 	if err != nil {
 		respuesta.Error(w, http.StatusInternalServerError,
 			"error_interno", "no se pudo iniciar sesión")

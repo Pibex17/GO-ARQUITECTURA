@@ -16,17 +16,14 @@ var ErrSinVinculo = errors.New("la cuenta no está vinculada a un usuario de neg
 // coherentes (usuario inexistente o rol distinto al de la cuenta).
 var ErrVinculoInvalido = errors.New("el vínculo de la cuenta no es válido")
 
+// ErrUsuarioNoEncontrado traduce el «no encontrado» de la persistencia para
+// que el repositorio no filtre errores de GORM hacia el servicio.
+var ErrUsuarioNoEncontrado = errors.New("el usuario de negocio no existe")
+
 // ResolutorVinculos es lo que necesitan los manejadores para pasar de una
 // sesión (cuenta) al usuario de negocio que realmente posee los recursos.
 type ResolutorVinculos interface {
 	UsuarioDe(s Sesion) (usuarios.Usuario, error)
-}
-
-// RepositorioVinculos es la parte de la base que hace falta para resolver
-// el vínculo. Una interfaz permite probarlo con dobles.
-type RepositorioVinculos interface {
-	CuentaPorID(id uint) (Cuenta, error)
-	UsuarioPorID(id uint) (usuarios.Usuario, error)
 }
 
 // Vinculos resuelve la cuenta del token contra la tabla cuentas y luego
@@ -73,11 +70,17 @@ type RepositorioVinculosGORM struct {
 func (r RepositorioVinculosGORM) CuentaPorID(id uint) (Cuenta, error) {
 	var c Cuenta
 	err := r.DB.First(&c, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Cuenta{}, ErrCuentaNoEncontrada
+	}
 	return c, err
 }
 
 func (r RepositorioVinculosGORM) UsuarioPorID(id uint) (usuarios.Usuario, error) {
 	var u usuarios.Usuario
 	err := r.DB.First(&u, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return usuarios.Usuario{}, ErrUsuarioNoEncontrado
+	}
 	return u, err
 }

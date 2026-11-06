@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/sesion"
 	"canchas-sinteticas/internal/usuarios"
@@ -15,11 +14,11 @@ import (
 
 var tokensDePrueba = sesion.NuevosTokens("secreto-solo-de-las-pruebas-canchas")
 
-// enrutador arma el servidor de prueba SIN base de datos (DB: nil).
-// Las pruebas de autenticación y rol responden antes de tocar m.DB.
+// enrutador arma el servidor de prueba sin repositorio. Sirve para las
+// pruebas que responden antes de llegar al servicio (401, 403, 400).
 func enrutador() http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{DB: nil}).Rutas(r, tokensDePrueba)
+	(&Manejador{Servicio: NuevoServicio(nil)}).Rutas(r, tokensDePrueba)
 	return r
 }
 
@@ -148,7 +147,7 @@ func (r *repoCanchasFalso) CanchaPorID(id uint) (Cancha, error) {
 			return cancha, nil
 		}
 	}
-	return Cancha{}, gorm.ErrRecordNotFound
+	return Cancha{}, ErrNoEncontrada
 }
 
 func (r *repoCanchasFalso) ListarCanchas(filtro FiltroCanchas) ([]Cancha, error) {
@@ -201,7 +200,7 @@ func (r *repoCanchasFalso) GuardarCancha(cancha *Cancha) error {
 
 func enrutadorCon(repo Repositorio, vinculos sesion.ResolutorVinculos) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Repo: repo, Vinculos: vinculos}).Rutas(r, tokensDePrueba)
+	(&Manejador{Servicio: NuevoServicio(repo), Vinculos: vinculos}).Rutas(r, tokensDePrueba)
 	return r
 }
 

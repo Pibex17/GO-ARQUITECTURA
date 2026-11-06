@@ -2,13 +2,13 @@ package partidos
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/reservas"
 	"canchas-sinteticas/internal/sesion"
@@ -17,12 +17,14 @@ import (
 
 var tokensDePrueba = sesion.NuevosTokens("secreto-solo-de-las-pruebas-partidos")
 
-// enrutador arma el servidor de prueba SIN base de datos (DB: nil).
-// Sirve porque todas las pruebas de este archivo responden ANTES
-// de tocar la base de datos.
+// enrutador arma el servidor de prueba SIN base de datos. Sirve porque
+// todas las pruebas que lo usan responden ANTES de tocar la base de datos.
 func enrutador() http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{DB: nil}).Rutas(r, tokensDePrueba)
+	(&Manejador{
+		Servicio: NuevoServicio(nil),
+		Vinculos: vinculosFalsos{usuario: usuarios.Usuario{ID: 2, Rol: sesion.RolCliente}},
+	}).Rutas(r, tokensDePrueba)
 	return r
 }
 
@@ -183,6 +185,26 @@ func TestObtenerPartidoInexistenteResponde404(t *testing.T) {
 	}
 }
 
+// TestObtenerPartidoConErrorDeConteoResponde500 comprueba que un fallo
+// interno al contar inscriptos no se disfraza de 404.
+func TestObtenerPartidoConErrorDeConteoResponde500(t *testing.T) {
+	repo := &repoPartidosFalso{
+		partido:          &Partido{ID: 1, Nombre: "Picadito", CupoMaximo: 10},
+		errInscripciones: errors.New("fallo de base"),
+	}
+	enrutador := enrutadorCon(repo, vinculosFalsos{})
+
+	peticion := httptest.NewRequest(http.MethodGet, "/partidos/1", nil)
+	peticion = conRol(t, peticion, sesion.RolCliente)
+	grabadora := httptest.NewRecorder()
+	enrutador.ServeHTTP(grabadora, peticion)
+
+	if grabadora.Code != http.StatusInternalServerError {
+		t.Fatalf("se esperaba 500 y llegó %d con cuerpo %s",
+			grabadora.Code, grabadora.Body.String())
+	}
+}
+
 // --- Dobles para probar la propiedad sin PostgreSQL ---
 
 type vinculosFalsos struct {
@@ -212,7 +234,7 @@ func (r *repoPartidosFalso) ReservaPorID(uint) (reservas.Reserva, error) {
 		return reservas.Reserva{}, r.errReserva
 	}
 	if r.reserva.ID == 0 {
-		return reservas.Reserva{}, gorm.ErrRecordNotFound
+		return reservas.Reserva{}, ErrReservaNoEncontrada
 	}
 	return r.reserva, nil
 }
@@ -224,7 +246,7 @@ func (r *repoPartidosFalso) PartidoPorReservaID(uint) (Partido, error) {
 	if r.existente != nil {
 		return *r.existente, nil
 	}
-	return Partido{}, gorm.ErrRecordNotFound
+	return Partido{}, ErrNoEncontrado
 }
 
 func (r *repoPartidosFalso) PartidoPorID(uint) (Partido, error) {
@@ -234,7 +256,7 @@ func (r *repoPartidosFalso) PartidoPorID(uint) (Partido, error) {
 	if r.partido != nil {
 		return *r.partido, nil
 	}
-	return Partido{}, gorm.ErrRecordNotFound
+	return Partido{}, ErrNoEncontrado
 }
 
 func (r *repoPartidosFalso) ContarInscripciones(uint) (int64, error) {
@@ -252,7 +274,7 @@ func (r *repoPartidosFalso) CrearPartido(partido *Partido) error {
 
 func enrutadorCon(repo Repositorio, vinculos sesion.ResolutorVinculos) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Repo: repo, Vinculos: vinculos}).Rutas(r, tokensDePrueba)
+	(&Manejador{Servicio: NuevoServicio(repo), Vinculos: vinculos}).Rutas(r, tokensDePrueba)
 	return r
 }
 

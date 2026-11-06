@@ -1,19 +1,15 @@
 package canchas
 
-import "gorm.io/gorm"
+import (
+	"errors"
+
+	"gorm.io/gorm"
+)
 
 // FiltroCanchas describe el catálogo que puede ver una sesión.
 type FiltroCanchas struct {
 	Activa          *bool
 	AdministradorID *uint
-}
-
-// Repositorio es la parte de la base que necesita el manejador de canchas.
-type Repositorio interface {
-	CanchaPorID(id uint) (Cancha, error)
-	ListarCanchas(filtro FiltroCanchas) ([]Cancha, error)
-	CrearCancha(cancha *Cancha) error
-	GuardarCancha(cancha *Cancha) error
 }
 
 // RepositorioGORM implementa Repositorio con PostgreSQL/GORM.
@@ -24,6 +20,9 @@ type RepositorioGORM struct {
 func (r RepositorioGORM) CanchaPorID(id uint) (Cancha, error) {
 	var cancha Cancha
 	err := r.DB.First(&cancha, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Cancha{}, ErrNoEncontrada
+	}
 	return cancha, err
 }
 
