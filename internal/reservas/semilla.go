@@ -4,7 +4,8 @@ import "gorm.io/gorm"
 
 // Sembrar carga datos de ejemplo solo si la tabla está vacía.
 // canchaID y clienteID son los IDs ya sembrados por internal/canchas
-// y internal/usuarios (en una base limpia: Cancha 1 y Usuario cliente 2).
+// y internal/usuarios. La seña de la reserva confirmada la siembra
+// internal/pagos.
 func Sembrar(db *gorm.DB, canchaID, clienteID uint) {
 	var total int64
 	db.Model(&Reserva{}).Count(&total)
@@ -21,9 +22,6 @@ func Sembrar(db *gorm.DB, canchaID, clienteID uint) {
 			CanchaID: canchaID, ClienteID: clienteID,
 			Fecha: "2026-10-04", HoraInicio: "19:00", HoraFin: "20:00",
 			Estado: "confirmada",
-			Pagos: []Pago{
-				{Tipo: "sena", Monto: 7.50, Metodo: "transferencia", Estado: "verificado"},
-			},
 		},
 	}
 	db.Create(&datos)

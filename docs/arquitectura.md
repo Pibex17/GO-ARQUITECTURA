@@ -1,157 +1,256 @@
-# Arquitectura del servidor
+# Arquitectura
 
-Documento de referencia para el equipo (Jorge incluido). Describe la
-estructura real de carpetas, las dependencias entre capas y dónde vive cada
-regla de negocio.
+## 1. Objetivo y restricciones
 
-## 1. Estructura real de carpetas
+El sistema pasa de un flujo síncrono en un solo paquete a una **Saga
+Coreografía** dentro de un **monolito modular**. Las restricciones que guían el
+diseño son:
 
-```text
-ServA-Aragundi-Castro/
-├── main.go                      # arranque: config, conexión, migrate/siembra, router
-├── main_integracion_test.go     # prueba E2E con `//go:build integration` (PostgreSQL real)
-├── internal/
-│   ├── canchas/                 # Cancha, Horario
-│   │   ├── modelos.go
-│   │   ├── repositorio.go       # interfaz + implementación GORM
-│   │   ├── manejadores.go       # HTTP
-│   │   ├── manejadores_test.go
-│   │   └── semilla.go
-│   ├── config/                  # variables de entorno (.env)
-│   │   ├── config.go
-│   │   └── config_test.go
-│   ├── inscripcion/             # Inscripcion a un partido
-│   │   ├── modelos.go
-│   │   ├── repositorio.go
-│   │   ├── manejadores.go
-│   │   ├── manejadores_test.go
-│   │   └── semilla.go
-│   ├── middleware/              # Registro y Recuperacion
-│   │   └── middleware.go
-│   ├── partidos/                # Partido
-│   │   ├── modelos.go
-│   │   ├── repositorio.go
-│   │   ├── manejadores.go
-│   │   ├── manejadores_test.go
-│   │   └── semilla.go
-│   ├── reservas/                # Reserva + Pago + máquina de estados
-│   │   ├── modelos.go           # estados y transiciones (sin HTTP)
-│   │   ├── modelos_test.go      # prueba pura de la tabla de transiciones
-│   │   ├── repositorio.go
-│   │   ├── manejadores.go
-│   │   ├── manejadores_test.go
-│   │   └── semilla.go
-│   ├── respuesta/               # envoltura JSON {ok, datos} / {ok, error}
-│   │   └── respuesta.go
-│   ├── sesion/                  # cuentas, bcrypt, JWT, guardias y login
-│   │   ├── cuentas.go
-│   │   ├── contrasenas.go
-│   │   ├── tokens.go
-│   │   ├── guardia.go
-│   │   ├── vinculo.go
-│   │   ├── manejadores.go
-│   │   ├── semilla.go
-│   │   └── *_test.go
-│   └── usuarios/                # Usuario de negocio
-│       ├── modelos.go
-│       └── semilla.go
-├── docs/
-│   ├── arquitectura.md          # este documento
-│   ├── openapi.yaml             # contrato de la API
-│   ├── hito2_hoja.md            # guion de demostración
-│   └── hito2_bruno/             # colección de peticiones
-└── docker-compose.yml           # PostgreSQL + app
+- Un solo binario y una sola base PostgreSQL: no se despliega infraestructura
+  de mensajería.
+- Los contextos de negocio no comparten tablas de escritura.
+- La API responde rápido y no bloquea al cliente mientras se ejecutan pasos
+  secundarios.
+- Los efectos deben ser auditables y reintentables: no se permite perder un
+  evento si el proceso cae.
+- No hay borrados físicos para compensar: se usan estados terminales.
+
+## 2. Estilo: monolito modular + coreografía
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Proceso Go único                            │
+│                                                                     │
+│  HTTP (Chi)                                                         │
+│   │                                                                 │
+│   ├── canchas ───────┐                                              │
+│   ├── reservas ──────┤  escriben estado + evento en una transacción  │
+│   ├── partidos ──────┤                                              │
+│   ├── inscripcion ───┘                                              │
+│   │                                                                 │
+│   ▼                                                                 │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │ eventos: outbox (tabla eventos) + despachador + bus         │     │
+│  └────────────────────────────────────────────────────────────┘     │
+│   │                                                                 │
+│   ├──► reservas  (consume y publica hechos de la reserva)            │
+│   ├──► pagos     (consume y publica hechos de la seña)               │
+│   ├──► partidos  (consume y publica hechos del partido)              │
+│   └──► sagas     (proyección de solo lectura)                        │
+│                                                                     │
+│  PostgreSQL: usuarios, canchas, reservas, pagos, partidos,           │
+│              inscripciones, cuentas, eventos, eventos_procesados,    │
+│              sagas                                                   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. Regla de dependencias
+**Coreografía** significa que ningún componente tiene el guion completo. Cada
+contexto conoce sus propias reglas y reacciona a los hechos que le importan.
+Por ejemplo, `pagos` no sabe cómo se confirma una reserva; solo sabe que al
+recibir `SenaAprobada` debe verificar la seña y publicar `SenaVerificada`.
+`reservas` decide si ese hecho permite confirmar.
 
-```text
-main.go
-  └── manejadores HTTP (internal/*/manejadores.go)
-        ├── interfaz Repositorio          (internal/*/repositorio.go)
-        │     └── implementación GORM     (misma carpeta)
-        └── sesion.ResolutorVinculos      (internal/sesion/vinculo.go)
-              └── implementación GORM
+La proyección `sagas` es un observador: no publica eventos ni ejecuta pasos.
+Sirve para que el cliente consulte el avance y para auditar.
+
+## 3. Contextos y responsabilidades
+
+| Contexto | Dueño de | Publica | Consume |
+| --- | --- | --- | --- |
+| `usuarios` | `Usuario` | — | — |
+| `canchas` | `Cancha`, `Horario` | — | — |
+| `reservas` | `Reserva` | `ReservaCreada`, `ReservaPasoAPagoPorVerificar`, `ReservaConfirmada`, `ReservaCancelada`, `ReservaJugada`, `ReservaNoActualizada`, `ReservaNoConfirmada`, `ReservaValidadaParaPartido`, `PartidoFallido` | `SenaRegistrada`, `SenaVerificada`, `RegistroSenaFallido`, `VerificacionSenaFallida`, `CancelacionSolicitada`, `JugadaSolicitada`, `SolicitudPartidoRecibida` |
+| `pagos` | `Pago` | `SenaRegistrada`, `SenaVerificada`, `RegistroSenaFallido`, `VerificacionSenaFallida`, `PagoAnulado`, `VerificacionRevertida` | `SenaDeclarada`, `SenaAprobada`, `ReservaCancelada`, `ReservaNoActualizada`, `ReservaNoConfirmada`, `ProcesamientoFallido` |
+| `partidos` | `Partido` | `PartidoCreado`, `PartidoCancelado` | `ReservaValidadaParaPartido`, `ReservaCancelada` |
+| `inscripcion` | `Inscripcion` | — | — |
+| `sesion` | `Cuenta`, tokens | — | — |
+| `eventos` | outbox, idempotencia, bus | — | — |
+| `sagas` | proyección `Saga` | — | todos (`*`) |
+
+`partidos` tiene una lectura de `reservas.Reserva` para validar la petición
+HTTP antes de aceptar el `202` (existencia, dueño y estado `confirmada`). Es
+una **lectura de solo lectura** para dar errores síncronos; la decisión de
+negocio se vuelve a validar en `reservas` al consumir
+`SolicitudPartidoRecibida`.
+
+## 4. Flujo de un evento
+
+1. **Validación síncrona** en el manejador HTTP: forma del cuerpo, token, rol,
+   propiedad y transición. Los errores `400/401/403/404/422` se devuelven aquí.
+2. **Transacción local**: el caso de uso guarda el cambio de estado y el
+   evento en la tabla `eventos` en la misma transacción. Si algo falla, no
+   queda ni el cambio ni el evento.
+3. **Respuesta `202`**: se devuelve `saga_id`, `Location: /sagas/{id}` y el
+   estado actual de la proyección.
+4. **Despacho**: el `Despachador` consulta eventos `pendiente`, los entrega al
+   `BusEnMemoria` y marca `publicado`. Si un consumidor falla, marca el intento
+   y reintenta hasta `MaxIntentos = 5`.
+5. **Consumo idempotente**: cada consumidor envuelve su cambio en
+   `ProcesadorGORM.Procesar`, que inserta `(evento_id, consumidor)` en
+   `eventos_procesados` dentro de la misma transacción. Si ya existe, no repite
+   el efecto.
+6. **Nuevos hechos**: el consumidor devuelve eventos derivados; el procesador
+   los guarda en el outbox dentro de la misma transacción. El despachador los
+   recogerá en el siguiente tick.
+7. **Proyección**: `sagas` recibe todos los eventos y actualiza `sagas` con el
+   último paso, estado, error y recurso.
+
+### Por qué outbox y no publicar directo al bus
+
+Si el manejador guardara la reserva y luego publicara en memoria, un crash
+entre ambos pasos perdería el evento. El outbox invierte el orden: primero se
+persiste el hecho, después se publica. El precio es un pequeño retraso (el
+intervalo del despachador, 100 ms) y la necesidad de idempotencia.
+
+### Garantías
+
+- **At-least-once**: un evento puede entregarse más de una vez.
+- **Idempotencia por consumidor**: el efecto se aplica una sola vez por
+  `(evento, consumidor)`.
+- **Orden**: el outbox se procesa por `ocurrido_en`; los eventos se generan
+  con una marca estrictamente creciente y los eventos derivados se encolan
+  después de su causa. La proyección descarta eventos anteriores a
+  `ultimo_evento_en`, así una reentrega vieja no la hace retroceder. No hay
+  orden global entre sagas distintas.
+- **Consistencia eventual**: la reserva y la saga pueden estar unos milisegundos
+  desincronizadas. El cliente hace polling.
+
+## 5. Diagramas de secuencia
+
+### 5.1 Pago de seña y confirmación
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    actor A as Administrador
+    participant R as reservas
+    participant O as outbox/despachador
+    participant P as pagos
+    participant S as sagas
+
+    C->>R: POST /reservas
+    R->>O: ReservaCreada (tx)
+    R-->>C: 201 Created
+    O->>S: ReservaCreada
+    S->>S: saga iniciada / reserva_creada
+
+    A->>R: PATCH /reservas/{id}/estado {pago_por_verificar}
+    R->>O: SenaDeclarada (tx)
+    R-->>A: 202 Accepted + saga_id
+    O->>P: SenaDeclarada
+    P->>P: crea Pago(sena, 30 %)
+    P->>O: SenaRegistrada
+    O->>R: SenaRegistrada
+    R->>R: Reserva.estado = pago_por_verificar
+    R->>O: ReservaPasoAPagoPorVerificar
+    O->>S: actualiza paso
+
+    A->>R: PATCH /reservas/{id}/estado {confirmada}
+    R->>O: SenaAprobada
+    R-->>A: 202 Accepted
+    O->>P: SenaAprobada
+    P->>P: Pago.estado = verificado
+    P->>O: SenaVerificada
+    O->>R: SenaVerificada
+    R->>R: Reserva.estado = confirmada
+    R->>O: ReservaConfirmada
+    O->>S: saga reserva_confirmada
 ```
 
-- **El manejador HTTP no ejecuta consultas directamente.** Solo conoce la
-  interfaz `Repositorio` y el `ResolutorVinculos`; las consultas GORM viven en
-  `repositorio.go`.
-- `Manejador.DB` solo se usa como valor por defecto en las fábricas
-  `m.repositorio()` y `m.vinculos()`. Las pruebas inyectan dobles con los
-  campos `Repo` y `Vinculos`, sin abrir PostgreSQL.
-- Los paquetes de negocio no importan `net/http` (salvo los `manejadores.go`).
-  En particular, `internal/reservas/modelos.go` no depende de HTTP.
+### 5.2 Creación de partido
 
-## 3. Máquina de estados de la reserva
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant R as reservas
+    participant O as outbox
+    participant P as partidos
+    participant S as sagas
 
-Vive en `internal/reservas/modelos.go`:
-
-- `estadosValidos`: `pendiente`, `pago_por_verificar`, `confirmada`,
-  `jugada`, `cancelada`.
-- `transicionesValidas`:
-  - `pendiente` → `pago_por_verificar`, `cancelada`
-  - `pago_por_verificar` → `confirmada`, `cancelada`
-  - `confirmada` → `jugada`, `cancelada`
-  - `jugada` y `cancelada` son terminales.
-- `transicionPermitida(de, a)` es una función pura.
-- `NuevoPagoSena(reservaID, precioHora, metodo, comprobante)` construye el
-  pago de seña con la regla de negocio del 30 % de `PrecioHora`.
-
-El handler `cambiarEstado` solo orquesta: autentica, autoriza, valida la
-petición, consulta el repositorio y aplica la transición. La prueba
-`internal/reservas/modelos_test.go` fija la tabla completa y el cálculo de la
-seña.
-
-## 4. Autenticación y autorización
-
-- `internal/sesion` guarda las cuentas en su propia tabla (`cuentas`), con
-  `ClaveHash` en bcrypt y `json:"-"`.
-- `POST /login` es público y devuelve únicamente `{"token": "..."}`.
-- `Tokens.Autenticar` responde 401 si falta el token, está vencido o no es
-  válido.
-- `SoloRol` responde 403 si el rol no corresponde. `PATCH /reservas/{id}/estado`
-  se registra con `soloAdmin`.
-- La propiedad del recurso se comprueba dentro del manejador (403 si la
-  reserva no pertenece a una cancha del administrador).
-
-## 5. Pruebas
-
-### Unitarias (sin base de datos)
-
-```bash
-go test ./... -count=1
+    C->>P: POST /partidos {ReservaID, Nombre, CupoMaximo}
+    P->>P: valida dueño y estado confirmada (lectura)
+    P->>O: SolicitudPartidoRecibida (tx)
+    P-->>C: 202 Accepted + saga_id
+    O->>R: SolicitudPartidoRecibida
+    R->>R: revalida dueño y estado
+    R->>O: ReservaValidadaParaPartido
+    O->>P: ReservaValidadaParaPartido
+    P->>P: crea Partido(activo)
+    P->>O: PartidoCreado
+    O->>S: saga completada / partido_creado
 ```
 
-Usan dobles de `Repositorio` y `ResolutorVinculos`. Cubren autenticación,
-roles, propiedad, validación de datos y transiciones.
+### 5.3 Cancelación y compensación
 
-### Integración HTTP/PostgreSQL
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as Administrador
+    participant R as reservas
+    participant O as outbox
+    participant P as pagos
+    participant F as partidos
+    participant S as sagas
 
-Archivo `main_integracion_test.go`, etiqueta `//go:build integration`.
-Levanta un `httptest.Server` con el mismo router de `main.go`, usa PostgreSQL
-real, crea una reserva nueva por API y recorre el guion de
-`docs/hito2_hoja.md` (login, 401, listado, 403, 200 y 422). Después comprueba
-la transición válida `pendiente → pago_por_verificar` (`200`) y la seña del
-30 %.
-
-```bash
-# Base desechable: la prueba borra y vuelve a sembrar sus tablas.
-docker compose exec -T db createdb -U postgres canchas_test
-
-TEST_DATABASE_URL="host=localhost user=postgres password=postgres dbname=canchas_test port=5432 sslmode=disable" \
-  go test -tags=integration . -run TestAPIExtremoAExtremo -v -count=1
+    A->>R: PATCH /reservas/{id}/estado {cancelada}
+    R->>O: CancelacionSolicitada (tx)
+    R-->>A: 202 Accepted
+    O->>R: CancelacionSolicitada
+    R->>R: Reserva.estado = cancelada
+    R->>O: ReservaCancelada
+    O->>P: ReservaCancelada
+    P->>P: Pago.estado = anulado
+    P->>O: PagoAnulado
+    O->>F: ReservaCancelada
+    F->>F: Partido.estado = cancelado
+    F->>O: PartidoCancelado
+    O->>S: saga cancelada + compensaciones
 ```
 
-Sin `TEST_DATABASE_URL` la prueba se omite y `go test ./...` sigue funcionando
-sin Docker, como en GitHub Actions.
+## 6. Manejo de fallos
 
-## 6. Cambios recientes que hay que documentar
+| Fallo | Detección | Reacción |
+| --- | --- | --- |
+| El cuerpo o la transición no son válidos | Manejador HTTP | `400/422`, no se publica nada. |
+| La reserva no pertenece al cliente | Manejador / consumidor | `403` o `PartidoFallido`. |
+| `pagos` no puede crear la seña | `Procesador` devuelve error | Se publica `RegistroSenaFallido`; la saga queda `fallida`. |
+| `reservas` no puede guardar el paso a `pago_por_verificar` | Error en la transacción | Se publica `ReservaNoActualizada`; `pagos` anula la seña. |
+| `reservas` no puede confirmar | Error en la transacción | Se publica `ReservaNoConfirmada`; `pagos` revierte la verificación. |
+| Un consumidor falla repetidamente | Despachador agota 5 intentos | Se publica `ProcesamientoFallido`; la saga queda `fallida`. |
+| El proceso se cae | Al reiniciar | El outbox conserva `pendiente`; el despachador reintenta. |
 
-1. `internal/partidos/repositorio.go` incorpora `PartidoPorID` y
-   `ContarInscripciones`; `GET /partidos/{id}` ya no usa `m.DB`.
-2. `main.go` extrae `prepararBase(db, reset)` y `nuevoEnrutador(db, tokens)`
-   para que `main()` y la prueba de integración ejecuten el mismo esquema y
-   las mismas siembras.
-3. `internal/reservas/modelos_test.go` fija la máquina de estados.
-4. `main_integracion_test.go` añade la prueba de extremo a extremo.
+No hay compensación infinita: si una compensación también falla, queda
+registrada como evento fallido y la saga en `fallida` para revisión manual.
+
+## 7. Evolución a un broker
+
+El bus está detrás de la interfaz `eventos.Bus`:
+
+```go
+type Bus interface {
+    Publicar(ctx context.Context, evento Evento) error
+    Suscribir(tipo string, manejador Manejador)
+}
+```
+
+Para cambiar a Kafka/RabbitMQ se reemplaza `BusEnMemoria` por una
+implementación que publique al broker y un consumidor que invoque a los
+suscriptores. El outbox, la idempotencia y los contratos de eventos no cambian.
+El precio de la migración es operativo (broker, particiones, monitoreo), no de
+dominio; por eso se difiere hasta que el volumen lo justifique.
+
+## 8. Decisiones de diseño visibles en el código
+
+- `sagas.IDDeReserva(id)` es determinista (`reserva-{id}`): evita que el
+  manejador y la proyección compitan por crear la misma saga.
+- Los eventos de compensación usan un ID determinista
+  (`evento.ID + "-" + tipo`): si el consumidor reintenta, el consumidor de la
+  compensación no duplica el efecto.
+- `Pago` salió de `reservas` a `pagos`; `Reserva.Pagos` queda como relación de
+  lectura para `GET /reservas/{id}`.
+- `Partido.Estado` se agregó para compensar sin borrar.
+- La API sigue devolviendo la envoltura `ok/datos/error` existente.
+
+Véase [`decisiones.md`](decisiones.md) para el registro de ADRs.

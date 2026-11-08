@@ -1,0 +1,28 @@
+meta {
+  name: Consultar saga
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/sagas/{{sagaId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenCliente}}
+}
+
+tests {
+  test("200 con estado", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.datos).to.have.property("estado");
+  });
+}
+
+script:post-response {
+  if (res.status === 200 && res.body.datos.recurso_id) {
+    bru.setEnvVar("partidoId", String(res.body.datos.recurso_id));
+  }
+}

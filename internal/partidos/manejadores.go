@@ -6,12 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
+	"canchas-sinteticas/internal/eventos"
 	"canchas-sinteticas/internal/respuesta"
+	"canchas-sinteticas/internal/sagas"
 	"canchas-sinteticas/internal/sesion"
 )
 
@@ -20,6 +21,8 @@ type Manejador struct {
 	DB       *gorm.DB
 	Repo     Repositorio
 	Vinculos sesion.ResolutorVinculos
+	Eventos  eventos.Publicador
+	Sagas    sagas.Registro
 }
 
 func (m *Manejador) repositorio() Repositorio {
@@ -36,8 +39,22 @@ func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
 }
 
-// Rutas: el cliente crea el partido de su reserva; el detalle lo puede
-// ver cualquier sesión (ficha Hito 1, sección 6).
+func (m *Manejador) eventos() eventos.Publicador {
+	if m.Eventos != nil {
+		return m.Eventos
+	}
+	return eventos.NuevoPublicador(m.DB, eventos.RepositorioOutboxGORM{DB: m.DB})
+}
+
+func (m *Manejador) sagas() sagas.Registro {
+	if m.Sagas != nil {
+		return m.Sagas
+	}
+	return sagas.NuevoCoordinador(sagas.RepositorioGORM{DB: m.DB})
+}
+
+// Rutas: el cliente solicita el partido de su reserva y la creación se
+// completa por coreografía; el detalle lo puede ver cualquier sesión.
 func (m *Manejador) Rutas(r chi.Router, tokens *sesion.Tokens) {
 	conSesion := r.With(tokens.Autenticar)
 	soloCliente := conSesion.With(sesion.SoloRol(sesion.RolCliente))
@@ -139,20 +156,32 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partido := Partido{
-		ReservaID:        entrada.ReservaID,
-		Nombre:           entrada.Nombre,
-		CupoMaximo:       entrada.CupoMaximo,
-		CodigoInvitacion: generarCodigoInvitacion(),
-		CreadoEn:         time.Now(),
-	}
-
-	if err := m.repositorio().CrearPartido(&partido); err != nil {
-		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo guardar el partido")
+	saga, err := m.sagas().Asegurar(r.Context(), sagas.TipoCicloReserva, entrada.ReservaID)
+	if err != nil {
+		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo preparar la saga del partido")
 		return
 	}
 
-	respuesta.Exito(w, http.StatusCreated, partido)
+	evento := eventos.NuevoEvento(
+		eventos.TipoSolicitudPartidoRecibida, entrada.ReservaID,
+		saga.ID, eventos.NuevoID(), "",
+		eventos.SolicitudPartidoRecibida{
+			ReservaID:  entrada.ReservaID,
+			ClienteID:  usuario.ID,
+			Nombre:     entrada.Nombre,
+			CupoMaximo: entrada.CupoMaximo,
+		})
+	if err := m.eventos().Publicar(r.Context(), evento); err != nil {
+		respuesta.Error(w, http.StatusInternalServerError, "error_base", "no se pudo publicar la solicitud del partido")
+		return
+	}
+
+	w.Header().Set("Location", "/sagas/"+saga.ID)
+	respuesta.Exito(w, http.StatusAccepted, map[string]any{
+		"saga_id": saga.ID,
+		"estado":  saga.Estado,
+		"paso":    saga.Paso,
+	})
 }
 
 // GET /partidos/{id}

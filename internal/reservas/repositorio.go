@@ -2,8 +2,10 @@ package reservas
 
 import (
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"canchas-sinteticas/internal/canchas"
+	"canchas-sinteticas/internal/eventos"
 )
 
 // FiltroReservas describe qué reservas puede ver una sesión. El manejador
@@ -15,17 +17,20 @@ type FiltroReservas struct {
 	AdministradorID      *uint // reservas de las canchas de este administrador
 }
 
-// Repositorio es la parte de la base que necesita el manejador de reservas.
-// Es una interfaz para poder probar la autorización con dobles.
+// ConstructorEvento construye el evento que acompaña a la creación de una
+// reserva. Se ejecuta dentro de la misma transacción, después de que la
+// reserva recibe su ID.
+type ConstructorEvento func(reserva *Reserva) eventos.Evento
+
+// Repositorio es la parte de la base que necesita el contexto de reservas.
 type Repositorio interface {
 	CanchaPorID(id uint) (canchas.Cancha, error)
 	HayConflicto(canchaID uint, fecha, horaInicio string) (bool, error)
-	CrearReserva(reserva *Reserva) error
+	CrearReservaConEvento(reserva *Reserva, nuevoEvento ConstructorEvento) error
 	ListarReservas(filtro FiltroReservas) ([]Reserva, error)
 	ReservaPorID(id uint) (Reserva, error)
-	GuardarReserva(reserva *Reserva) error
-	CrearPago(pago *Pago) error
-	MarcarPagoSenaVerificado(reservaID uint) error
+	ReservaPorIDEnTx(tx *gorm.DB, id uint) (Reserva, error)
+	GuardarReservaEnTx(tx *gorm.DB, reserva *Reserva) error
 }
 
 // RepositorioGORM implementa Repositorio con PostgreSQL/GORM.
@@ -48,12 +53,20 @@ func (r RepositorioGORM) HayConflicto(canchaID uint, fecha, horaInicio string) (
 	return enConflicto > 0, err
 }
 
-func (r RepositorioGORM) CrearReserva(reserva *Reserva) error {
-	return r.DB.Debug().Create(reserva).Error
+// CrearReservaConEvento guarda la reserva y su evento ReservaCreada en la
+// misma transacción: o se guardan ambos, o no se guarda ninguno.
+func (r RepositorioGORM) CrearReservaConEvento(reserva *Reserva, nuevoEvento ConstructorEvento) error {
+	return r.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(reserva).Error; err != nil {
+			return err
+		}
+		evento := nuevoEvento(reserva)
+		return tx.Create(&evento).Error
+	})
 }
 
 func (r RepositorioGORM) ListarReservas(filtro FiltroReservas) ([]Reserva, error) {
-	consulta := r.DB.Debug().Preload("Pagos")
+	consulta := r.DB.Preload("Pagos")
 
 	if filtro.Estado != "" {
 		consulta = consulta.Where("estado = ?", filtro.Estado)
@@ -82,16 +95,14 @@ func (r RepositorioGORM) ReservaPorID(id uint) (Reserva, error) {
 	return reserva, err
 }
 
-func (r RepositorioGORM) GuardarReserva(reserva *Reserva) error {
-	return r.DB.Save(reserva).Error
+// ReservaPorIDEnTx bloquea la fila mientras el consumidor aplica la
+// transición, para que dos eventos concurrentes no pisen el mismo estado.
+func (r RepositorioGORM) ReservaPorIDEnTx(tx *gorm.DB, id uint) (Reserva, error) {
+	var reserva Reserva
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&reserva, id).Error
+	return reserva, err
 }
 
-func (r RepositorioGORM) CrearPago(pago *Pago) error {
-	return r.DB.Create(pago).Error
-}
-
-func (r RepositorioGORM) MarcarPagoSenaVerificado(reservaID uint) error {
-	return r.DB.Model(&Pago{}).
-		Where("reserva_id = ? AND tipo = ? AND estado = ?", reservaID, "sena", "pendiente").
-		Update("estado", "verificado").Error
+func (r RepositorioGORM) GuardarReservaEnTx(tx *gorm.DB, reserva *Reserva) error {
+	return tx.Save(reserva).Error
 }

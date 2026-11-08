@@ -28,7 +28,7 @@ func (r RepositorioGORM) CanchaPorID(id uint) (Cancha, error) {
 }
 
 func (r RepositorioGORM) ListarCanchas(filtro FiltroCanchas) ([]Cancha, error) {
-	consulta := r.DB.Debug().Preload("Horarios")
+	consulta := r.DB.Preload("Horarios")
 	if filtro.Activa != nil {
 		consulta = consulta.Where("activa = ?", *filtro.Activa)
 	}
@@ -42,7 +42,7 @@ func (r RepositorioGORM) ListarCanchas(filtro FiltroCanchas) ([]Cancha, error) {
 }
 
 func (r RepositorioGORM) CrearCancha(cancha *Cancha) error {
-	return r.DB.Debug().Create(cancha).Error
+	return r.DB.Create(cancha).Error
 }
 
 func (r RepositorioGORM) GuardarCancha(cancha *Cancha) error {

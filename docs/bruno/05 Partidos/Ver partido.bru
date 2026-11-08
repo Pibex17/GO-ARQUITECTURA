@@ -1,0 +1,22 @@
+meta {
+  name: Ver partido
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/partidos/{{partidoId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenCliente}}
+}
+
+tests {
+  test("200 con estado", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.datos.partido).to.have.property("Estado");
+  });
+}

@@ -1,0 +1,30 @@
+meta {
+  name: Declarar seña
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/reservas/{{reservaId}}/estado
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenAdmin}}
+}
+
+body:json {
+  {
+    "NuevoEstado": "pago_por_verificar",
+    "Metodo": "efectivo",
+    "ComprobanteURL": "https://ejemplo.invalid/comprobante.jpg"
+  }
+}
+
+tests {
+  test("202 aceptado", function() {
+    expect(res.status).to.equal(202);
+    expect(res.body.datos.saga_id).to.be.a("string");
+  });
+}

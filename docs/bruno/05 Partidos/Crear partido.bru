@@ -1,0 +1,30 @@
+meta {
+  name: Crear partido
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/partidos
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenCliente}}
+}
+
+body:json {
+  {
+    "ReservaID": {{reservaId}},
+    "Nombre": "Amistoso del sábado",
+    "CupoMaximo": 10
+  }
+}
+
+tests {
+  test("202 aceptado", function() {
+    expect(res.status).to.equal(202);
+    expect(res.body.datos.saga_id).to.be.a("string");
+  });
+}

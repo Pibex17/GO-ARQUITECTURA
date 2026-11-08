@@ -1,915 +1,382 @@
 openapi: 3.1.0
-jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
-
 info:
-  title: ServA · API de reservas de canchas sintéticas
-  version: 1.0.0
-  summary: Contrato del servidor HTTP real de ServA para el Hito 2.
-  description: |
-    Contrato OpenAPI 3.1 de los once endpoints implementados en este repositorio.
-    Se redactó a partir de `main.go`, los manejadores, los modelos y el middleware,
-    no a partir de la documentación antigua. Cuando la ficha del Hito 1 y el código
-    difieren, este contrato representa el código que realmente se ejecuta.
-
-    ## Envoltura de las respuestas
-
-    Todas las respuestas usan el mismo sobre JSON:
-
-    - Éxito: `{"ok": true, "datos": ...}`. `datos` se omite únicamente cuando el
-      valor enviado es `nil`; las operaciones documentadas siempre envían datos.
-    - Error: `{"ok": false, "error": {"codigo": "...", "mensaje": "..."}}`.
-
-    ## Serialización
-
-    Los modelos de negocio no tienen etiquetas `json`, así que `encoding/json`
-    publica los nombres de los campos Go en PascalCase: `ID`, `CanchaID`,
-    `ClienteID`, `HoraInicio`, `PrecioHora`, `AdministradorID`, `Pagos`, etc.
-    Los cuerpos de solicitud también usan esos nombres, salvo `POST /login`, que
-    usa `usuario` y `clave`, y el detalle de partido, que devuelve un mapa con
-    `partido`, `inscriptos` y `cupos_restantes`. No se debe asumir `snake_case`
-    en los campos de los modelos.
-
-    ## Autenticación
-
-    `POST /login` es público y devuelve un JWT HS256 de una hora. Las demás rutas
-    exigen `Authorization: Bearer <jwt>`. El token lleva `sub` (ID de la cuenta),
-    `usuario`, `rol`, `iat` y `exp`; la firma se valida con la clave del entorno y
-    el algoritmo se limita a HS256. No se documentan tokens ni claves reales.
-
-    Los roles del negocio son `cliente` y `administrador`. Además de validar el
-    token, los manejadores que resuelven el dueño exigen que la cuenta tenga un
-    vínculo con un usuario de negocio y que el rol del token, de la cuenta y del
-    usuario coincidan. Si no se cumple, responden `403 cuenta_sin_vinculo`.
-
-    ## Códigos globales
-
-    - `404 ruta_inexistente`: cualquier ruta no registrada. Se distingue de
-      `404 no_encontrado`, que indica que la ruta existe pero el recurso no.
-    - `405 metodo_no_permitido`: la ruta existe, pero el método HTTP no está
-      registrado para ella.
-    - `500 error_interno`: el middleware de recuperación atrapa un pánico y
-      responde sin exponer el detalle. Varias operaciones también pueden devolver
-      `500 error_base` ante un fallo de base de datos.
-
-    ## Alcance del documento
-
-    No se inventaron rutas nuevas. El mapa de la sección 7 de la ficha del Hito 1
-    no identifica endpoints adicionales que falten, y las acciones sin ruta
-    explícita (editar horarios, reportes, etc.) no se incluyen. Tampoco se marca
-    ninguna operación como `(plan)` porque las once documentadas ya existen.
-
-    ## Diferencias relevantes con la ficha del Hito 1
-
-    - `PATCH /reservas/{id}/estado` es solo para administrador y la transición
-      prohibida responde `422 transicion_invalida`, no `400`.
-    - `POST /reservas` no acepta ni documenta `requiere_comprobante`; el servidor
-      actual no tiene ese campo.
-    - Las fechas y horas son cadenas no vacías; el servidor no valida formato,
-      solapamiento por `HoraFin` ni calendario.
-    - `GET /partidos/{id}` solo exige un token válido: no resuelve el vínculo de
-      negocio ni aplica una regla de propiedad.
+  title: ServA · Canchas Sintéticas
+  version: 2.0.0
+  summary: API asíncrona con Saga Coreografía.
   license:
-    name: Uso académico
-    identifier: LicenseRef-Uso-Academico
+    name: MIT
+    url: https://opensource.org/license/mit
+  description: |
+    Servidor HTTP para reservar canchas sintéticas, cobrar la seña y organizar
+    partidos. Las operaciones que inician pasos de la saga responden `202
+    Accepted` con un `saga_id`; el cliente consulta `GET /sagas/{id}` para
+    conocer el resultado.
 
+    La fuente de verdad es el código de este repositorio. La documentación
+    anterior está en `docs/legacy/` y no debe usarse para implementar.
 servers:
-  - url: http://127.0.0.1:8080
-    description: Servidor local del proyecto (equivale a localhost:8080).
-
+  - url: https://api.serva.invalid
+    description: Servidor de ejemplo; en local use http://localhost:8080.
 security:
   - bearerAuth: []
-
 tags:
   - name: Sesión
-    description: Inicio de sesión y emisión del token.
+    description: Autenticación y tokens.
   - name: Canchas
-    description: Catálogo, creación y edición de canchas.
+    description: Catálogo de canchas.
   - name: Reservas
-    description: Reservas, pagos asociados y cambios de estado.
+    description: Ciclo de vida de una reserva.
+  - name: Sagas
+    description: Consulta del avance de una saga.
   - name: Partidos
-    description: Partidos creados a partir de una reserva confirmada.
-  - name: Inscripciones
-    description: Inscripción de clientes a un partido con código de invitación.
+    description: Partidos e inscripciones.
 
 paths:
   /login:
     post:
-      tags:
-        - Sesión
-      summary: Iniciar sesión y obtener un JWT
-      description: |
-        Ruta pública. Recibe `usuario` y `clave`, busca la cuenta y compara la
-        contraseña con el hash bcrypt almacenado. Si el usuario no existe o la
-        contraseña no coincide, devuelve el mismo `401 credenciales_invalidas`
-        para no revelar cuentas existentes. El token dura una hora.
-
-        Si faltan `usuario` o `clave`, el servidor no responde `422`: busca una
-        cuenta con esos valores vacíos y termina en `401 credenciales_invalidas`.
+      tags: [Sesión]
+      summary: Iniciar sesión
       operationId: iniciarSesion
       security: []
-      x-required-role: publico
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SolicitudLogin'
-            examples:
-              ejemplo:
-                summary: Credenciales ficticias
-                value:
-                  usuario: cliente.ejemplo
-                  clave: clave-ficticia
+              $ref: '#/components/schemas/LoginEntrada'
       responses:
         '200':
-          description: Token emitido correctamente.
+          description: Token emitido.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaToken'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      token: TOKEN_DE_EJEMPLO_NO_VALIDO
+                $ref: '#/components/schemas/OkToken'
         '400':
-          $ref: '#/components/responses/CuerpoMalformado'
+          $ref: '#/components/responses/SolicitudInvalida'
         '401':
           description: Usuario o contraseña incorrectos.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                credenciales_invalidas:
-                  value:
-                    ok: false
-                    error:
-                      codigo: credenciales_invalidas
-                      mensaje: usuario o contraseña incorrectos
-        '404':
-          $ref: '#/components/responses/RutaInexistente'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
         '500':
           $ref: '#/components/responses/ErrorInterno'
 
   /canchas:
     get:
-      tags:
-        - Canchas
+      tags: [Canchas]
       summary: Listar canchas visibles para la sesión
-      description: |
-        Exige una sesión válida. El rol decide el alcance y el query no puede
-        ampliarlo:
-
-        - `cliente`: recibe solo canchas con `Activa = true`. Puede enviar
-          `administrador_id` para limitar el catálogo a las canchas activas de un
-          administrador concreto.
-        - `administrador`: recibe solo sus propias canchas, activas e inactivas.
-          El query `administrador_id` se ignora.
-
-        Cada cancha se devuelve con su arreglo `Horarios` precargado. Un rol
-        distinto de los dos roles del negocio termina en `403 permiso_denegado`.
       operationId: listarCanchas
-      x-required-role: cualquier_sesion
       parameters:
-        - $ref: '#/components/parameters/AdministradorIDQuery'
+        - name: administrador_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
-          description: Lista de canchas permitidas para la sesión.
+          description: Lista de canchas.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaListaCanchas'
-              examples:
-                cliente:
-                  value:
-                    ok: true
-                    datos:
-                      - ID: 1
-                        Nombre: Cancha El Golazo 1
-                        Tipo: futbol_5
-                        Direccion: Av. Los Shyris y Naciones Unidas
-                        PrecioHora: 25
-                        Activa: true
-                        AdministradorID: 1
-                        Horarios:
-                          - ID: 1
-                            CanchaID: 1
-                            DiaSemana: sabado
-                            HoraInicio: '18:00'
-                            HoraFin: '19:00'
-                            Activo: true
+                $ref: '#/components/schemas/OkCanchaLista'
         '400':
-          $ref: '#/components/responses/ParametroInvalido'
+          $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '403':
-          $ref: '#/components/responses/PermisoDenegado'
-        '404':
-          $ref: '#/components/responses/RutaInexistente'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
-
+          $ref: '#/components/responses/Prohibido'
     post:
-      tags:
-        - Canchas
-      summary: Crear una cancha para el administrador autenticado
-      description: |
-        Solo administrador. El cuerpo no incluye `AdministradorID`: el dueño se
-        toma de la sesión y un valor enviado en el cuerpo se ignora. El servidor
-        crea la cancha con `Activa = true`.
-
-        Son obligatorios `Nombre`, `Tipo`, `Direccion` y un `PrecioHora` mayor
-        que cero. `Tipo` debe ser `futbol_5`, `futbol_7` o `futbol_11`. Si el JSON
-        está mal formado se responde `400`; si falta un dato o no es válido,
-        `422`.
+      tags: [Canchas]
+      summary: Crear una cancha
       operationId: crearCancha
-      x-required-role: administrador
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SolicitudCrearCancha'
-            examples:
-              ejemplo:
-                value:
-                  Nombre: Cancha El Golazo 3
-                  Tipo: futbol_7
-                  Direccion: Av. Los Shyris y Naciones Unidas
-                  PrecioHora: 35
+              $ref: '#/components/schemas/CanchaEntrada'
       responses:
         '201':
           description: Cancha creada.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaCancha'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 3
-                      Nombre: Cancha El Golazo 3
-                      Tipo: futbol_7
-                      Direccion: Av. Los Shyris y Naciones Unidas
-                      PrecioHora: 35
-                      Activa: true
-                      AdministradorID: 1
-                      Horarios: null
+                $ref: '#/components/schemas/OkCancha'
         '400':
-          $ref: '#/components/responses/CuerpoMalformado'
+          $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '403':
-          $ref: '#/components/responses/PermisoDenegado'
-        '404':
-          $ref: '#/components/responses/RutaInexistente'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
+          $ref: '#/components/responses/Prohibido'
         '422':
-          description: Faltan datos obligatorios, el precio no es positivo o el tipo no es válido.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                datos_invalidos:
-                  value:
-                    ok: false
-                    error:
-                      codigo: datos_invalidos
-                      mensaje: nombre y dirección son obligatorios
-                precio_invalido:
-                  value:
-                    ok: false
-                    error:
-                      codigo: datos_invalidos
-                      mensaje: el precio por hora debe ser mayor que cero
-                tipo_invalido:
-                  value:
-                    ok: false
-                    error:
-                      codigo: tipo_invalido
-                      mensaje: el tipo de cancha no es válido
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
+          $ref: '#/components/responses/NoProcesable'
 
   /canchas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
     patch:
-      tags:
-        - Canchas
-      summary: Actualizar una cancha propia
-      description: |
-        Solo administrador y solo si la cancha pertenece al administrador
-        autenticado. Es una actualización parcial: se aplican los campos que
-        lleguen con valor distinto de cero (`Nombre`, `Tipo`, `Direccion`,
-        `PrecioHora > 0`) y `Activa` cuando el campo booleano está presente.
-
-        No se puede cambiar el dueño ni borrar la cancha. Enviar `Nombre: ""`,
-        `PrecioHora: 0` o cadenas vacías no limpia el valor anterior. `Tipo`, si
-        llega no vacío, debe ser uno de los tres valores válidos.
+      tags: [Canchas]
+      summary: Editar una cancha propia
       operationId: actualizarCancha
-      x-required-role: administrador
-      parameters:
-        - $ref: '#/components/parameters/ID'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SolicitudActualizarCancha'
-            examples:
-              ejemplo:
-                value:
-                  Nombre: Cancha El Golazo 1 (renombrada)
-                  PrecioHora: 28
-                  Activa: false
+              $ref: '#/components/schemas/CanchaActualizar'
       responses:
         '200':
           description: Cancha actualizada.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaCancha'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 1
-                      Nombre: Cancha El Golazo 1 (renombrada)
-                      Tipo: futbol_5
-                      Direccion: Av. Los Shyris y Naciones Unidas
-                      PrecioHora: 28
-                      Activa: false
-                      AdministradorID: 1
-                      Horarios: null
+                $ref: '#/components/schemas/OkCancha'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '403':
-          $ref: '#/components/responses/PermisoDenegado'
+          $ref: '#/components/responses/Prohibido'
         '404':
-          $ref: '#/components/responses/CanchaNoEncontrada'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
+          $ref: '#/components/responses/NoEncontrado'
         '422':
-          description: El tipo de cancha no es válido.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                tipo_invalido:
-                  value:
-                    ok: false
-                    error:
-                      codigo: tipo_invalido
-                      mensaje: el tipo de cancha no es válido
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
+          $ref: '#/components/responses/NoProcesable'
 
   /reservas:
+    get:
+      tags: [Reservas]
+      summary: Listar reservas visibles para la sesión
+      operationId: listarReservas
+      parameters:
+        - name: estado
+          in: query
+          schema:
+            $ref: '#/components/schemas/EstadoReserva'
+        - name: cliente_id
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Lista de reservas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkReservaLista'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '403':
+          $ref: '#/components/responses/Prohibido'
     post:
-      tags:
-        - Reservas
-      summary: Crear una reserva para el cliente autenticado
-      description: |
-        Solo cliente. El dueño se deriva de la sesión: `ClienteID` no se acepta
-        desde el cuerpo y se ignora si se envía. Son obligatorios `CanchaID`,
-        `Fecha`, `HoraInicio` y `HoraFin`.
-
-        La cancha debe existir y estar activa. Se busca un conflicto entre
-        reservas no canceladas con la misma cancha, fecha y `HoraInicio`; el
-        servidor no calcula solapamientos con `HoraFin`. La reserva nace en
-        estado `pendiente` y no se crea ningún pago en esta operación.
+      tags: [Reservas]
+      summary: Crear una reserva
       operationId: crearReserva
-      x-required-role: cliente
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SolicitudCrearReserva'
-            examples:
-              ejemplo:
-                value:
-                  CanchaID: 1
-                  Fecha: '2026-11-07'
-                  HoraInicio: '18:00'
-                  HoraFin: '19:00'
+              $ref: '#/components/schemas/ReservaEntrada'
       responses:
         '201':
-          description: Reserva creada en estado pendiente.
+          description: Reserva creada. El evento ReservaCreada queda en el outbox.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaReserva'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 10
-                      CanchaID: 1
-                      ClienteID: 2
-                      Fecha: '2026-11-07'
-                      HoraInicio: '18:00'
-                      HoraFin: '19:00'
-                      Estado: pendiente
-                      Pagos: null
-        '400':
-          $ref: '#/components/responses/CuerpoMalformado'
-        '401':
-          $ref: '#/components/responses/NoAutenticado'
-        '403':
-          $ref: '#/components/responses/PermisoDenegado'
-        '404':
-          $ref: '#/components/responses/RutaInexistente'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
-        '409':
-          description: Ya existe una reserva no cancelada para esa cancha, fecha y hora de inicio.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                horario_ocupado:
-                  value:
-                    ok: false
-                    error:
-                      codigo: horario_ocupado
-                      mensaje: ya existe una reserva para esa cancha, fecha y hora
-        '422':
-          description: Faltan datos obligatorios o la cancha no existe/está inactiva.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                datos_invalidos:
-                  value:
-                    ok: false
-                    error:
-                      codigo: datos_invalidos
-                      mensaje: cancha_id, fecha, hora_inicio y hora_fin son obligatorios
-                cancha_invalida:
-                  value:
-                    ok: false
-                    error:
-                      codigo: cancha_invalida
-                      mensaje: no existe una cancha activa con ese id
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
-
-    get:
-      tags:
-        - Reservas
-      summary: Listar las reservas visibles para la sesión
-      description: |
-        Exige una sesión válida. El cliente solo ve sus propias reservas; el
-        administrador solo ve las reservas de sus canchas. Cada reserva se
-        devuelve con su arreglo `Pagos` precargado.
-
-        `estado` filtra por coincidencia exacta y no se valida contra una lista.
-        `cliente_id` solo se lee para el administrador y reduce dentro de sus
-        canchas; para el cliente se ignora. Un `cliente_id` no numérico o menor
-        que uno en el caso del administrador responde `400 id_invalido`.
-      operationId: listarReservas
-      x-required-role: cualquier_sesion
-      parameters:
-        - $ref: '#/components/parameters/EstadoQuery'
-        - $ref: '#/components/parameters/ClienteIDQuery'
-      responses:
-        '200':
-          description: Reservas permitidas para la sesión.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RespuestaListaReservas'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      - ID: 10
-                        CanchaID: 1
-                        ClienteID: 2
-                        Fecha: '2026-11-07'
-                        HoraInicio: '18:00'
-                        HoraFin: '19:00'
-                        Estado: pendiente
-                        Pagos: []
-        '400':
-          $ref: '#/components/responses/ParametroInvalido'
-        '401':
-          $ref: '#/components/responses/NoAutenticado'
-        '403':
-          $ref: '#/components/responses/PermisoDenegado'
-        '404':
-          $ref: '#/components/responses/RutaInexistente'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
-
-  /reservas/{id}:
-    get:
-      tags:
-        - Reservas
-      summary: Obtener una reserva por id
-      description: |
-        Exige una sesión válida. El cliente solo puede leer una reserva cuyo
-        `ClienteID` sea el suyo; el administrador solo una reserva de una cancha
-        suya. Si la reserva existe pero no es accesible, responde
-        `403 permiso_denegado`. Si no existe, `404 no_encontrado`. Devuelve la
-        reserva con su arreglo `Pagos`.
-      operationId: obtenerReserva
-      x-required-role: cualquier_sesion
-      parameters:
-        - $ref: '#/components/parameters/ID'
-      responses:
-        '200':
-          description: Reserva encontrada y accesible.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RespuestaReserva'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 2
-                      CanchaID: 1
-                      ClienteID: 2
-                      Fecha: '2026-10-04'
-                      HoraInicio: '19:00'
-                      HoraFin: '20:00'
-                      Estado: confirmada
-                      Pagos:
-                        - ID: 1
-                          ReservaID: 2
-                          Tipo: sena
-                          Monto: 7.5
-                          Metodo: transferencia
-                          ComprobanteURL: https://ejemplo.invalid/comprobante-1.jpg
-                          Estado: verificado
-        '400':
-          $ref: '#/components/responses/IDInvalido'
-        '401':
-          $ref: '#/components/responses/NoAutenticado'
-        '403':
-          $ref: '#/components/responses/PermisoDenegado'
-        '404':
-          $ref: '#/components/responses/ReservaNoEncontrada'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
-
-  /reservas/{id}/estado:
-    patch:
-      tags:
-        - Reservas
-      summary: Cambiar el estado de una reserva
-      description: |
-        Solo administrador, y solo para reservas de sus propias canchas. El
-        cuerpo exige `NuevoEstado`. El servidor valida que el estado exista y
-        después que la transición esté permitida; una transición prohibida
-        responde `422 transicion_invalida`.
-
-        Transiciones permitidas (el servidor las acepta por esta ruta para el
-        administrador):
-
-        - `pendiente` → `pago_por_verificar` o `cancelada`
-        - `pago_por_verificar` → `confirmada` o `cancelada`
-        - `confirmada` → `jugada` o `cancelada`
-        - `jugada` y `cancelada` no tienen salida
-
-        Efectos reales: al pasar a `pago_por_verificar` se crea un `Pago` de tipo
-        `sena`, monto igual al 30 % de `PrecioHora`, con `Metodo` y
-        `ComprobanteURL` tomados del cuerpo (no se validan) y estado `pendiente`.
-        Al pasar a `confirmada` se marca como `verificado` el pago de seña
-        pendiente. Al pasar a `cancelada` no se modifica el estado de los pagos.
-      operationId: cambiarEstadoReserva
-      x-required-role: administrador
-      parameters:
-        - $ref: '#/components/parameters/ID'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SolicitudCambiarEstado'
-            examples:
-              confirmar:
-                value:
-                  NuevoEstado: confirmada
-              dejar_pago_por_verificar:
-                value:
-                  NuevoEstado: pago_por_verificar
-                  Metodo: transferencia
-                  ComprobanteURL: https://ejemplo.invalid/comprobante-1.jpg
-      responses:
-        '200':
-          description: Reserva con su nuevo estado y sus pagos.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RespuestaReserva'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 10
-                      CanchaID: 1
-                      ClienteID: 2
-                      Fecha: '2026-11-07'
-                      HoraInicio: '18:00'
-                      HoraFin: '19:00'
-                      Estado: cancelada
-                      Pagos:
-                        - ID: 1
-                          ReservaID: 10
-                          Tipo: sena
-                          Monto: 7.5
-                          Metodo: transferencia
-                          ComprobanteURL: https://ejemplo.invalid/comprobante-1.jpg
-                          Estado: pendiente
+                $ref: '#/components/schemas/OkReserva'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '403':
-          $ref: '#/components/responses/PermisoDenegado'
-        '404':
-          $ref: '#/components/responses/ReservaNoEncontrada'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
+          $ref: '#/components/responses/Prohibido'
+        '409':
+          $ref: '#/components/responses/Conflicto'
         '422':
-          description: El estado no existe o la transición desde el estado actual no está permitida.
+          $ref: '#/components/responses/NoProcesable'
+
+  /reservas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Reservas]
+      summary: Obtener una reserva con sus pagos
+      operationId: obtenerReserva
+      responses:
+        '200':
+          description: Reserva encontrada.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                estado_invalido:
-                  value:
-                    ok: false
-                    error:
-                      codigo: estado_invalido
-                      mensaje: ese estado no existe
-                transicion_invalida:
-                  value:
-                    ok: false
-                    error:
-                      codigo: transicion_invalida
-                      mensaje: no se puede pasar de jugada a cancelada
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
+                $ref: '#/components/schemas/OkReserva'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '403':
+          $ref: '#/components/responses/Prohibido'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+
+  /reservas/{id}/estado:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [Reservas]
+      summary: Iniciar un paso de la saga de la reserva
+      description: |
+        Valida rol, propiedad y transición de forma síncrona. Si se acepta,
+        publica el hecho correspondiente y responde `202` con la saga. El
+        cambio de estado real lo aplica el consumidor de `reservas`.
+      operationId: cambiarEstadoReserva
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CambiarEstadoEntrada'
+      responses:
+        '202':
+          description: Paso aceptado; consultar la saga.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Ruta de la saga, por ejemplo `/sagas/reserva-7`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkAceptado'
+        '400':
+          $ref: '#/components/responses/SolicitudInvalida'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '403':
+          $ref: '#/components/responses/Prohibido'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '422':
+          $ref: '#/components/responses/NoProcesable'
+
+  /sagas/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Identificador determinista, por ejemplo `reserva-7`.
+        schema:
+          type: string
+          pattern: '^reserva-[0-9]+$'
+    get:
+      tags: [Sagas]
+      summary: Consultar el estado de una saga
+      operationId: obtenerSaga
+      responses:
+        '200':
+          description: Proyección de la saga.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkSaga'
+        '401':
+          $ref: '#/components/responses/NoAutorizado'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
 
   /partidos:
     post:
-      tags:
-        - Partidos
-      summary: Crear un partido a partir de una reserva confirmada
+      tags: [Partidos]
+      summary: Solicitar la creación de un partido
       description: |
-        Solo cliente y solo para una reserva propia. La reserva debe existir y
-        estar en estado `confirmada`. Cada reserva puede tener como máximo un
-        partido. El servidor genera un `CodigoInvitacion` de seis caracteres y
-        asigna `CreadoEn`; el cliente no elige ninguno de los dos.
-
-        Son obligatorios `ReservaID`, `Nombre` y un `CupoMaximo` mayor que cero.
+        Valida que la reserva exista, sea del cliente y esté confirmada.
+        Responde `202`; el partido lo crea la saga cuando `reservas` publica
+        `ReservaValidadaParaPartido`.
       operationId: crearPartido
-      x-required-role: cliente
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SolicitudCrearPartido'
-            examples:
-              ejemplo:
-                value:
-                  ReservaID: 2
-                  Nombre: Picadito del sábado
-                  CupoMaximo: 10
+              $ref: '#/components/schemas/PartidoEntrada'
       responses:
-        '201':
-          description: Partido creado.
+        '202':
+          description: Solicitud aceptada; consultar la saga.
+          headers:
+            Location:
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaPartido'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 2
-                      ReservaID: 2
-                      Nombre: Picadito del sábado
-                      CupoMaximo: 10
-                      CodigoInvitacion: K3F9QZ
-                      CreadoEn: '2026-11-07T12:00:00Z'
+                $ref: '#/components/schemas/OkAceptado'
         '400':
-          $ref: '#/components/responses/CuerpoMalformado'
+          $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '403':
-          $ref: '#/components/responses/PermisoDenegado'
+          $ref: '#/components/responses/Prohibido'
         '404':
-          $ref: '#/components/responses/ReservaNoEncontrada'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
+          $ref: '#/components/responses/NoEncontrado'
         '409':
-          description: Ya existe un partido para esa reserva.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                partido_existente:
-                  value:
-                    ok: false
-                    error:
-                      codigo: partido_existente
-                      mensaje: ya existe un partido para esa reserva
+          $ref: '#/components/responses/Conflicto'
         '422':
-          description: Faltan datos o la reserva no está confirmada.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                datos_invalidos:
-                  value:
-                    ok: false
-                    error:
-                      codigo: datos_invalidos
-                      mensaje: reserva_id, nombre y cupo_maximo son obligatorios
-                reserva_no_confirmada:
-                  value:
-                    ok: false
-                    error:
-                      codigo: reserva_no_confirmada
-                      mensaje: solo se puede crear un partido desde una reserva confirmada
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
+          $ref: '#/components/responses/NoProcesable'
 
   /partidos/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
     get:
-      tags:
-        - Partidos
-      summary: Ver el detalle de un partido y sus cupos
-      description: |
-        Exige un token válido, pero no resuelve el vínculo de negocio ni aplica
-        una regla de propiedad: cualquier token aceptado por el guardia puede
-        consultar cualquier partido. Devuelve un objeto con `partido`,
-        `inscriptos` y `cupos_restantes`.
-
-        Cualquier error al leer el partido se traduce en
-        `404 no_encontrado`; no hay un `500 error_base` propio de este manejador.
+      tags: [Partidos]
+      summary: Obtener un partido
       operationId: obtenerPartido
-      x-required-role: cualquier_sesion
-      parameters:
-        - $ref: '#/components/parameters/ID'
       responses:
         '200':
-          description: Detalle del partido y conteo de inscripciones.
+          description: Partido encontrado con el conteo de inscriptos.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaDetallePartido'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      partido:
-                        ID: 1
-                        ReservaID: 2
-                        Nombre: Picadito del sábado
-                        CupoMaximo: 10
-                        CodigoInvitacion: ABC123
-                        CreadoEn: '2026-10-04T10:00:00Z'
-                      inscriptos: 2
-                      cupos_restantes: 8
+                $ref: '#/components/schemas/OkPartidoDetalle'
         '400':
-          $ref: '#/components/responses/IDInvalido'
+          $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '404':
-          $ref: '#/components/responses/PartidoNoEncontrado'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
+          $ref: '#/components/responses/NoEncontrado'
 
   /partidos/{id}/inscripciones:
+    parameters:
+      - $ref: '#/components/parameters/Id'
     post:
-      tags:
-        - Inscripciones
-      summary: Inscribir al cliente autenticado en un partido
-      description: |
-        Solo cliente. El jugador se deriva de la sesión: `JugadorID` no se acepta
-        desde el cuerpo y se ignora si se envía. El cuerpo exige
-        `CodigoInvitacion`, que debe coincidir exactamente con el del partido.
-
-        No se puede inscribir dos veces el mismo jugador ni superar
-        `CupoMaximo`. No se comprueba que el cliente sea distinto del creador del
-        partido; cualquier cliente con el código puede inscribirse.
+      tags: [Partidos]
+      summary: Inscribirse en un partido
       operationId: crearInscripcion
-      x-required-role: cliente
-      parameters:
-        - $ref: '#/components/parameters/ID'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SolicitudCrearInscripcion'
-            examples:
-              ejemplo:
-                value:
-                  CodigoInvitacion: ABC123
+              $ref: '#/components/schemas/InscripcionEntrada'
       responses:
         '201':
           description: Inscripción creada.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RespuestaInscripcion'
-              examples:
-                exito:
-                  value:
-                    ok: true
-                    datos:
-                      ID: 3
-                      PartidoID: 1
-                      JugadorID: 2
-                      CreadoEn: '2026-11-07T12:05:00Z'
+                $ref: '#/components/schemas/OkInscripcion'
         '400':
           $ref: '#/components/responses/SolicitudInvalida'
         '401':
-          $ref: '#/components/responses/NoAutenticado'
+          $ref: '#/components/responses/NoAutorizado'
         '403':
-          $ref: '#/components/responses/PermisoDenegado'
+          $ref: '#/components/responses/Prohibido'
         '404':
-          $ref: '#/components/responses/PartidoNoEncontrado'
-        '405':
-          $ref: '#/components/responses/MetodoNoPermitido'
+          $ref: '#/components/responses/NoEncontrado'
         '409':
-          description: El jugador ya está inscrito o el partido está lleno.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                ya_inscripto:
-                  value:
-                    ok: false
-                    error:
-                      codigo: ya_inscripto
-                      mensaje: el jugador ya está inscrito en este partido
-                partido_lleno:
-                  value:
-                    ok: false
-                    error:
-                      codigo: partido_lleno
-                      mensaje: el partido ya no tiene cupos disponibles
+          $ref: '#/components/responses/Conflicto'
         '422':
-          description: Falta el código o el código no coincide.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorRespuesta'
-              examples:
-                datos_invalidos:
-                  value:
-                    ok: false
-                    error:
-                      codigo: datos_invalidos
-                      mensaje: codigo_invitacion es obligatorio
-                codigo_invalido:
-                  value:
-                    ok: false
-                    error:
-                      codigo: codigo_invalido
-                      mensaje: el código de invitación no es válido
-        '500':
-          $ref: '#/components/responses/ErrorInterno'
+          $ref: '#/components/responses/NoProcesable'
 
 components:
   securitySchemes:
@@ -917,831 +384,452 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: |
-        JWT firmado con HS256 y enviado como `Authorization: Bearer <jwt>`.
-        Dura una hora. El token ausente, vencido o inválido responde `401`.
 
   parameters:
-    ID:
+    Id:
       name: id
       in: path
       required: true
-      description: Identificador positivo del recurso.
       schema:
         type: integer
-        format: int64
-        minimum: 1
-    AdministradorIDQuery:
-      name: administrador_id
-      in: query
-      required: false
-      description: |
-        Solo se aplica al rol cliente: limita el catálogo a las canchas activas
-        del administrador indicado. Para el rol administrador se ignora. Un valor
-        no numérico o menor que uno responde `400 id_invalido`.
-      schema:
-        type: integer
-        format: int64
-        minimum: 1
-    EstadoQuery:
-      name: estado
-      in: query
-      required: false
-      description: |
-        Filtro por coincidencia exacta del estado. El servidor no valida el valor
-        contra la lista de estados: un valor desconocido simplemente no coincide.
-      schema:
-        type: string
-      examples:
-        pendiente:
-          value: pendiente
-        confirmada:
-          value: confirmada
-    ClienteIDQuery:
-      name: cliente_id
-      in: query
-      required: false
-      description: |
-        Solo se aplica al rol administrador y reduce el resultado a las reservas
-        de ese cliente dentro de las canchas del administrador. Para el rol
-        cliente se ignora. Un valor no numérico o menor que uno responde
-        `400 id_invalido` cuando lo procesa el administrador.
-      schema:
-        type: integer
-        format: int64
         minimum: 1
 
+  responses:
+    SolicitudInvalida:
+      description: Cuerpo o parámetros inválidos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+    NoAutorizado:
+      description: Falta el token o es inválido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+    Prohibido:
+      description: Rol o propiedad incorrectos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+    NoEncontrado:
+      description: El recurso no existe.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+    Conflicto:
+      description: Conflicto con el estado actual del recurso.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+    NoProcesable:
+      description: Datos o transición no válidos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+    ErrorInterno:
+      description: Falla inesperada del servidor o de la base de datos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorRespuesta'
+
   schemas:
-    ErrorRespuesta:
+    LoginEntrada:
       type: object
-      additionalProperties: false
-      required:
-        - ok
-        - error
+      required: [usuario, clave]
       properties:
-        ok:
-          type: boolean
-          const: false
-        error:
-          type: object
-          additionalProperties: false
-          required:
-            - codigo
-            - mensaje
-          properties:
-            codigo:
-              type: string
-              description: Código estable de la envoltura de error.
-            mensaje:
-              type: string
-              description: Mensaje legible para la persona que consume la API.
+        usuario:
+          type: string
+          example: ana
+        clave:
+          type: string
+          format: password
+          example: ana-2026
 
     Token:
       type: object
-      required:
-        - token
+      required: [token]
       properties:
         token:
           type: string
-          description: JWT HS256 ficticio en los ejemplos; no usar un token real en la documentación.
+          description: JWT firmado.
 
-    RespuestaToken:
+    OkToken:
       type: object
-      required:
-        - ok
-        - datos
+      required: [ok, datos]
       properties:
         ok:
           type: boolean
-          const: true
+          enum: [true]
         datos:
           $ref: '#/components/schemas/Token'
 
+    ErrorDetalle:
+      type: object
+      required: [codigo, mensaje]
+      properties:
+        codigo:
+          type: string
+          example: transicion_invalida
+        mensaje:
+          type: string
+          example: no se puede pasar de jugada a cancelada
+
+    ErrorRespuesta:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          $ref: '#/components/schemas/ErrorDetalle'
+
+    CanchaEntrada:
+      type: object
+      required: [Nombre, Tipo, Direccion, PrecioHora]
+      properties:
+        Nombre:
+          type: string
+        Tipo:
+          type: string
+          enum: [futbol_5, futbol_7, futbol_11]
+        Direccion:
+          type: string
+        PrecioHora:
+          type: number
+          exclusiveMinimum: 0
+
+    CanchaActualizar:
+      type: object
+      properties:
+        Nombre:
+          type: string
+        Tipo:
+          type: string
+          enum: [futbol_5, futbol_7, futbol_11]
+        Direccion:
+          type: string
+        PrecioHora:
+          type: number
+          exclusiveMinimum: 0
+        Activa:
+          type: [boolean, 'null']
+
     Horario:
       type: object
-      required:
-        - ID
-        - CanchaID
-        - DiaSemana
-        - HoraInicio
-        - HoraFin
-        - Activo
       properties:
         ID:
           type: integer
-          format: int64
-          minimum: 1
         CanchaID:
           type: integer
-          format: int64
-          minimum: 1
         DiaSemana:
           type: string
-          enum:
-            - lunes
-            - martes
-            - miercoles
-            - jueves
-            - viernes
-            - sabado
-            - domingo
+          enum: [lunes, martes, miercoles, jueves, viernes, sabado, domingo]
         HoraInicio:
           type: string
-          description: Cadena de hora; el modelo usa el formato HH:MM.
-          examples:
-            - '18:00'
+          pattern: '^[0-2][0-9]:[0-5][0-9]$'
         HoraFin:
           type: string
-          description: Cadena de hora; el modelo usa el formato HH:MM.
-          examples:
-            - '19:00'
+          pattern: '^[0-2][0-9]:[0-5][0-9]$'
         Activo:
           type: boolean
 
     Cancha:
       type: object
-      required:
-        - ID
-        - Nombre
-        - Tipo
-        - Direccion
-        - PrecioHora
-        - Activa
-        - AdministradorID
-        - Horarios
       properties:
         ID:
           type: integer
-          format: int64
-          minimum: 1
         Nombre:
           type: string
         Tipo:
           type: string
-          enum:
-            - futbol_5
-            - futbol_7
-            - futbol_11
         Direccion:
           type: string
         PrecioHora:
           type: number
-          format: double
-          exclusiveMinimum: 0
         Activa:
           type: boolean
         AdministradorID:
           type: integer
-          format: int64
-          minimum: 1
         Horarios:
-          description: |
-            Arreglo de horarios precargado en los listados. Puede ser `null`
-            cuando la operación devuelve una cancha recién creada o guardada sin
-            precargar la asociación.
-          type:
-            - array
-            - 'null'
+          type: array
           items:
             $ref: '#/components/schemas/Horario'
 
-    RespuestaCancha:
+    OkCancha:
       type: object
-      required:
-        - ok
-        - datos
+      required: [ok, datos]
       properties:
         ok:
           type: boolean
-          const: true
+          enum: [true]
         datos:
           $ref: '#/components/schemas/Cancha'
 
-    RespuestaListaCanchas:
+    OkCanchaLista:
       type: object
-      required:
-        - ok
-        - datos
+      required: [ok, datos]
       properties:
         ok:
           type: boolean
-          const: true
+          enum: [true]
         datos:
           type: array
           items:
             $ref: '#/components/schemas/Cancha'
 
+    EstadoReserva:
+      type: string
+      enum: [pendiente, pago_por_verificar, confirmada, jugada, cancelada]
+
     Pago:
       type: object
-      required:
-        - ID
-        - ReservaID
-        - Tipo
-        - Monto
-        - Metodo
-        - ComprobanteURL
-        - Estado
       properties:
         ID:
           type: integer
-          format: int64
-          minimum: 1
         ReservaID:
           type: integer
-          format: int64
-          minimum: 1
         Tipo:
           type: string
-          enum:
-            - sena
-            - saldo
+          enum: [sena, saldo]
         Monto:
           type: number
-          format: double
         Metodo:
           type: string
-          description: |
-            La ficha propone transferencia, efectivo o tarjeta, pero el servidor
-            no valida este campo al crear el pago de seña.
-          examples:
-            - transferencia
+          enum: [transferencia, efectivo, tarjeta]
         ComprobanteURL:
           type: string
-          description: Cadena tomada del cuerpo; el servidor no valida el formato.
         Estado:
           type: string
-          enum:
-            - pendiente
-            - verificado
-            - rechazado
+          enum: [pendiente, verificado, anulado]
 
-    Reserva:
+    ReservaEntrada:
       type: object
-      required:
-        - ID
-        - CanchaID
-        - ClienteID
-        - Fecha
-        - HoraInicio
-        - HoraFin
-        - Estado
-        - Pagos
+      required: [CanchaID, Fecha, HoraInicio, HoraFin]
       properties:
-        ID:
-          type: integer
-          format: int64
-          minimum: 1
         CanchaID:
           type: integer
-          format: int64
-          minimum: 1
-        ClienteID:
-          type: integer
-          format: int64
           minimum: 1
         Fecha:
           type: string
-          description: Cadena de fecha; el modelo usa el formato YYYY-MM-DD. No se valida el calendario.
-          examples:
-            - '2026-11-07'
+          example: '2026-10-21'
         HoraInicio:
           type: string
-          description: Cadena de hora; el modelo usa el formato HH:MM. No se valida el formato.
+          example: '18:00'
         HoraFin:
           type: string
-          description: Cadena de hora; el modelo usa el formato HH:MM. No se valida el formato.
-        Estado:
+          example: '19:00'
+
+    Reserva:
+      type: object
+      properties:
+        ID:
+          type: integer
+        CanchaID:
+          type: integer
+        ClienteID:
+          type: integer
+        Fecha:
           type: string
-          enum:
-            - pendiente
-            - pago_por_verificar
-            - confirmada
-            - jugada
-            - cancelada
+        HoraInicio:
+          type: string
+        HoraFin:
+          type: string
+        Estado:
+          $ref: '#/components/schemas/EstadoReserva'
         Pagos:
-          description: |
-            Arreglo de pagos precargado en consultas. Puede ser `null` en la
-            respuesta de una reserva recién creada.
-          type:
-            - array
-            - 'null'
+          type: [array, 'null']
           items:
             $ref: '#/components/schemas/Pago'
 
-    RespuestaReserva:
+    OkReserva:
       type: object
-      required:
-        - ok
-        - datos
+      required: [ok, datos]
       properties:
         ok:
           type: boolean
-          const: true
+          enum: [true]
         datos:
           $ref: '#/components/schemas/Reserva'
 
-    RespuestaListaReservas:
+    OkReservaLista:
       type: object
-      required:
-        - ok
-        - datos
+      required: [ok, datos]
       properties:
         ok:
           type: boolean
-          const: true
+          enum: [true]
         datos:
           type: array
           items:
             $ref: '#/components/schemas/Reserva'
 
-    Partido:
+    CambiarEstadoEntrada:
       type: object
-      required:
-        - ID
-        - ReservaID
-        - Nombre
-        - CupoMaximo
-        - CodigoInvitacion
-        - CreadoEn
-      properties:
-        ID:
-          type: integer
-          format: int64
-          minimum: 1
-        ReservaID:
-          type: integer
-          format: int64
-          minimum: 1
-        Nombre:
-          type: string
-        CupoMaximo:
-          type: integer
-          format: int64
-          minimum: 1
-        CodigoInvitacion:
-          type: string
-          description: Código de seis caracteres generado por el servidor.
-        CreadoEn:
-          type: string
-          format: date-time
-          description: Marca de tiempo en RFC 3339 generada por Go.
-
-    RespuestaPartido:
-      type: object
-      required:
-        - ok
-        - datos
-      properties:
-        ok:
-          type: boolean
-          const: true
-        datos:
-          $ref: '#/components/schemas/Partido'
-
-    RespuestaDetallePartido:
-      type: object
-      required:
-        - ok
-        - datos
-      properties:
-        ok:
-          type: boolean
-          const: true
-        datos:
-          type: object
-          additionalProperties: false
-          required:
-            - partido
-            - inscriptos
-            - cupos_restantes
-          properties:
-            partido:
-              $ref: '#/components/schemas/Partido'
-            inscriptos:
-              type: integer
-              format: int64
-              minimum: 0
-            cupos_restantes:
-              type: integer
-              format: int64
-
-    Inscripcion:
-      type: object
-      required:
-        - ID
-        - PartidoID
-        - JugadorID
-        - CreadoEn
-      properties:
-        ID:
-          type: integer
-          format: int64
-          minimum: 1
-        PartidoID:
-          type: integer
-          format: int64
-          minimum: 1
-        JugadorID:
-          type: integer
-          format: int64
-          minimum: 1
-        CreadoEn:
-          type: string
-          format: date-time
-
-    RespuestaInscripcion:
-      type: object
-      required:
-        - ok
-        - datos
-      properties:
-        ok:
-          type: boolean
-          const: true
-        datos:
-          $ref: '#/components/schemas/Inscripcion'
-
-    SolicitudLogin:
-      type: object
-      required:
-        - usuario
-        - clave
-      properties:
-        usuario:
-          type: string
-          description: Nombre de la cuenta, no el email ni el ID.
-        clave:
-          type: string
-          format: password
-          description: Contraseña en claro solo en tránsito; el servidor guarda un hash bcrypt.
-
-    SolicitudCrearCancha:
-      type: object
-      required:
-        - Nombre
-        - Tipo
-        - Direccion
-        - PrecioHora
-      properties:
-        Nombre:
-          type: string
-          minLength: 1
-        Tipo:
-          type: string
-          enum:
-            - futbol_5
-            - futbol_7
-            - futbol_11
-        Direccion:
-          type: string
-          minLength: 1
-        PrecioHora:
-          type: number
-          format: double
-          exclusiveMinimum: 0
-      description: |
-        `AdministradorID` y `Activa` no se leen del cuerpo: el dueño sale de la
-        sesión y el servidor crea la cancha activa.
-
-    SolicitudActualizarCancha:
-      type: object
-      description: |
-        Actualización parcial. Los campos son opcionales; los valores vacíos o
-        cero se ignoran, salvo `Activa`, que se aplica si está presente.
-      properties:
-        Nombre:
-          type: string
-        Tipo:
-          type: string
-          enum:
-            - futbol_5
-            - futbol_7
-            - futbol_11
-        Direccion:
-          type: string
-        PrecioHora:
-          type: number
-          format: double
-          description: Solo se aplica si es mayor que cero.
-        Activa:
-          type: boolean
-
-    SolicitudCrearReserva:
-      type: object
-      required:
-        - CanchaID
-        - Fecha
-        - HoraInicio
-        - HoraFin
-      properties:
-        CanchaID:
-          type: integer
-          format: int64
-          minimum: 1
-        Fecha:
-          type: string
-          minLength: 1
-          description: El servidor solo comprueba que no esté vacía; el formato convenido es YYYY-MM-DD.
-        HoraInicio:
-          type: string
-          minLength: 1
-          description: El servidor solo comprueba que no esté vacía; el formato convenido es HH:MM.
-        HoraFin:
-          type: string
-          minLength: 1
-          description: El servidor solo comprueba que no esté vacía; el formato convenido es HH:MM.
-      description: |
-        `ClienteID` no se lee del cuerpo: el dueño sale de la sesión.
-
-    SolicitudCambiarEstado:
-      type: object
-      required:
-        - NuevoEstado
+      required: [NuevoEstado]
       properties:
         NuevoEstado:
           type: string
-          enum:
-            - pendiente
-            - pago_por_verificar
-            - confirmada
-            - jugada
-            - cancelada
+          enum: [pendiente, pago_por_verificar, confirmada, jugada, cancelada]
         Metodo:
           type: string
-          description: Solo se usa al pasar a pago_por_verificar; el servidor no valida el valor.
+          enum: [transferencia, efectivo, tarjeta]
         ComprobanteURL:
           type: string
-          description: Solo se usa al pasar a pago_por_verificar; el servidor no valida el formato.
 
-    SolicitudCrearPartido:
+    Aceptado:
       type: object
-      required:
-        - ReservaID
-        - Nombre
-        - CupoMaximo
+      required: [saga_id, estado, paso]
+      properties:
+        saga_id:
+          type: string
+          example: reserva-7
+        estado:
+          type: string
+          enum: [iniciada, en_proceso, completada, compensando, compensada, cancelada, fallida]
+        paso:
+          type: string
+          example: iniciada
+
+    OkAceptado:
+      type: object
+      required: [ok, datos]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        datos:
+          $ref: '#/components/schemas/Aceptado'
+
+    Saga:
+      type: object
+      properties:
+        id:
+          type: string
+          example: reserva-7
+        tipo:
+          type: string
+          example: ciclo_reserva
+        agregado_id:
+          type: integer
+        estado:
+          type: string
+          enum: [iniciada, en_proceso, completada, compensando, compensada, cancelada, fallida]
+        paso:
+          type: string
+        ultimo_evento_id:
+          type: string
+        ultimo_evento_en:
+          type: string
+          format: date-time
+        error:
+          type: string
+        recurso_id:
+          type: integer
+        creada_en:
+          type: string
+          format: date-time
+        actualizada_en:
+          type: string
+          format: date-time
+
+    OkSaga:
+      type: object
+      required: [ok, datos]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        datos:
+          $ref: '#/components/schemas/Saga'
+
+    PartidoEntrada:
+      type: object
+      required: [ReservaID, Nombre, CupoMaximo]
       properties:
         ReservaID:
           type: integer
-          format: int64
           minimum: 1
         Nombre:
           type: string
-          minLength: 1
         CupoMaximo:
           type: integer
-          format: int64
           minimum: 1
 
-    SolicitudCrearInscripcion:
+    Partido:
       type: object
-      required:
-        - CodigoInvitacion
+      properties:
+        ID:
+          type: integer
+        ReservaID:
+          type: integer
+        Nombre:
+          type: string
+        CupoMaximo:
+          type: integer
+        CodigoInvitacion:
+          type: string
+        CreadoEn:
+          type: string
+          format: date-time
+        Estado:
+          type: string
+          enum: [activo, cancelado]
+
+    PartidoDetalle:
+      type: object
+      required: [partido, inscriptos, cupos_restantes]
+      properties:
+        partido:
+          $ref: '#/components/schemas/Partido'
+        inscriptos:
+          type: integer
+          minimum: 0
+        cupos_restantes:
+          type: integer
+
+    OkPartidoDetalle:
+      type: object
+      required: [ok, datos]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        datos:
+          $ref: '#/components/schemas/PartidoDetalle'
+
+    InscripcionEntrada:
+      type: object
+      required: [CodigoInvitacion]
       properties:
         CodigoInvitacion:
           type: string
-          minLength: 1
-      description: |
-        `JugadorID` no se lee del cuerpo: el jugador sale de la sesión.
 
-  responses:
-    CuerpoMalformado:
-      description: El cuerpo no es JSON válido.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            cuerpo_malformado:
-              value:
-                ok: false
-                error:
-                  codigo: cuerpo_malformado
-                  mensaje: el cuerpo debe ser JSON
+    Inscripcion:
+      type: object
+      properties:
+        ID:
+          type: integer
+        PartidoID:
+          type: integer
+        JugadorID:
+          type: integer
+        CreadoEn:
+          type: string
+          format: date-time
 
-    IDInvalido:
-      description: El id de la ruta no es un entero positivo.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            id_invalido:
-              value:
-                ok: false
-                error:
-                  codigo: id_invalido
-                  mensaje: el id debe ser un entero positivo
-
-    ParametroInvalido:
-      description: Un parámetro de query numérico no es un entero positivo.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            administrador_id:
-              value:
-                ok: false
-                error:
-                  codigo: id_invalido
-                  mensaje: el administrador_id debe ser un entero positivo
-            cliente_id:
-              value:
-                ok: false
-                error:
-                  codigo: id_invalido
-                  mensaje: el cliente_id debe ser un entero positivo
-
-    SolicitudInvalida:
-      description: El id de la ruta o el cuerpo JSON no son válidos.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            id_invalido:
-              value:
-                ok: false
-                error:
-                  codigo: id_invalido
-                  mensaje: el id debe ser un entero positivo
-            cuerpo_malformado:
-              value:
-                ok: false
-                error:
-                  codigo: cuerpo_malformado
-                  mensaje: el cuerpo debe ser JSON
-
-    NoAutenticado:
-      description: Falta el token, está vencido o no es un JWT válido.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            falta_token:
-              value:
-                ok: false
-                error:
-                  codigo: falta_token
-                  mensaje: 'falta el token: inicie sesión en POST /login'
-            token_vencido:
-              value:
-                ok: false
-                error:
-                  codigo: token_vencido
-                  mensaje: 'el token está vencido: inicie sesión otra vez'
-            token_invalido:
-              value:
-                ok: false
-                error:
-                  codigo: token_invalido
-                  mensaje: el token no es válido
-
-    PermisoDenegado:
-      description: |
-        El rol no tiene permiso, la cuenta no tiene vínculo de negocio o el
-        recurso pertenece a otro usuario u otra cancha.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            rol:
-              value:
-                ok: false
-                error:
-                  codigo: permiso_denegado
-                  mensaje: su rol no tiene permiso para esta acción
-            sin_vinculo:
-              value:
-                ok: false
-                error:
-                  codigo: cuenta_sin_vinculo
-                  mensaje: la cuenta no está vinculada a un usuario de negocio
-            recurso_ajeno:
-              value:
-                ok: false
-                error:
-                  codigo: permiso_denegado
-                  mensaje: la reserva no es suya ni de sus canchas
-
-    RutaInexistente:
-      description: |
-        La ruta solicitada no está registrada. El router responde con esta
-        envoltura antes de llegar a cualquier manejador de negocio.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            ruta_inexistente:
-              value:
-                ok: false
-                error:
-                  codigo: ruta_inexistente
-                  mensaje: la ruta no existe
-
-    CanchaNoEncontrada:
-      description: |
-        No existe una cancha con ese id (`no_encontrado`). Si la ruta no está
-        registrada, el router responde `ruta_inexistente`.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            no_encontrado:
-              value:
-                ok: false
-                error:
-                  codigo: no_encontrado
-                  mensaje: no existe una cancha con ese id
-            ruta_inexistente:
-              value:
-                ok: false
-                error:
-                  codigo: ruta_inexistente
-                  mensaje: la ruta no existe
-
-    ReservaNoEncontrada:
-      description: |
-        No existe una reserva con ese id (`no_encontrado`). Si la ruta no está
-        registrada, el router responde `ruta_inexistente`.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            no_encontrado:
-              value:
-                ok: false
-                error:
-                  codigo: no_encontrado
-                  mensaje: no existe una reserva con ese id
-            ruta_inexistente:
-              value:
-                ok: false
-                error:
-                  codigo: ruta_inexistente
-                  mensaje: la ruta no existe
-
-    PartidoNoEncontrado:
-      description: |
-        No existe un partido con ese id (`no_encontrado`). En `GET /partidos/{id}`
-        cualquier error de lectura se traduce a este mismo `404`. Si la ruta no
-        está registrada, el router responde `ruta_inexistente`.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            no_encontrado:
-              value:
-                ok: false
-                error:
-                  codigo: no_encontrado
-                  mensaje: no existe un partido con ese id
-            ruta_inexistente:
-              value:
-                ok: false
-                error:
-                  codigo: ruta_inexistente
-                  mensaje: la ruta no existe
-
-    MetodoNoPermitido:
-      description: La ruta existe, pero el método HTTP no está registrado para ella.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            metodo_no_permitido:
-              value:
-                ok: false
-                error:
-                  codigo: metodo_no_permitido
-                  mensaje: el método no está permitido en esta ruta
-
-    ErrorInterno:
-      description: |
-        Fallo inesperado del servidor o de la base de datos. `error_base` lo usan
-        los manejadores que no pudieron persistir o leer; `error_interno` lo usa
-        el middleware que atrapa un pánico. Nunca se exponen detalles internos.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorRespuesta'
-          examples:
-            error_base:
-              value:
-                ok: false
-                error:
-                  codigo: error_base
-                  mensaje: no se pudo guardar la operación
-            error_interno:
-              value:
-                ok: false
-                error:
-                  codigo: error_interno
-                  mensaje: ocurrió un error inesperado
+    OkInscripcion:
+      type: object
+      required: [ok, datos]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        datos:
+          $ref: '#/components/schemas/Inscripcion'

@@ -1,5 +1,9 @@
-// Package reservas trae Reserva (la entidad con máquina de estados) y Pago.
+// Package reservas trae Reserva (la entidad con máquina de estados).
+// El pago vive en internal/pagos; aquí solo se conserva la relación de
+// lectura para las consultas HTTP.
 package reservas
+
+import "canchas-sinteticas/internal/pagos"
 
 // Reserva es el turno que un cliente pide en una cancha.
 type Reserva struct {
@@ -10,18 +14,7 @@ type Reserva struct {
 	HoraInicio string // "HH:MM"
 	HoraFin    string // "HH:MM"
 	Estado     string // pendiente | pago_por_verificar | confirmada | jugada | cancelada
-	Pagos      []Pago
-}
-
-// Pago es un abono (seña o saldo) asociado a una Reserva.
-type Pago struct {
-	ID             uint
-	ReservaID      uint
-	Tipo           string // sena | saldo
-	Monto          float64
-	Metodo         string // transferencia | efectivo | tarjeta
-	ComprobanteURL string
-	Estado         string // pendiente | verificado | rechazado
+	Pagos      []pagos.Pago
 }
 
 // estadosValidos son los únicos valores que puede tomar Reserva.Estado.
@@ -34,8 +27,7 @@ var estadosValidos = map[string]bool{
 }
 
 // transicionesValidas dice, para cada estado, a qué estados se puede pasar.
-// Es la tabla de la Sección 5 de la ficha del negocio, ahora en código:
-// de "jugada" no sale ninguna transición (estado terminal).
+// Es la tabla de la máquina de estados del negocio.
 var transicionesValidas = map[string][]string{
 	"pendiente":          {"pago_por_verificar", "cancelada"},
 	"pago_por_verificar": {"confirmada", "cancelada"},
@@ -52,21 +44,4 @@ func transicionPermitida(de, a string) bool {
 		}
 	}
 	return false
-}
-
-// porcentajeSena es la regla de negocio de la ficha: la seña es el 30 %
-// del precio por hora de la cancha.
-const porcentajeSena = 0.30
-
-// NuevoPagoSena construye el pago que se crea al pasar una reserva a
-// "pago_por_verificar". La regla del 30 % vive aquí, no en el handler HTTP.
-func NuevoPagoSena(reservaID uint, precioHora float64, metodo, comprobanteURL string) Pago {
-	return Pago{
-		ReservaID:      reservaID,
-		Tipo:           "sena",
-		Monto:          precioHora * porcentajeSena,
-		Metodo:         metodo,
-		ComprobanteURL: comprobanteURL,
-		Estado:         "pendiente",
-	}
 }

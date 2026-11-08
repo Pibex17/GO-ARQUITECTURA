@@ -1,6 +1,10 @@
 package partidos
 
-import "gorm.io/gorm"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // Sembrar carga datos de ejemplo solo si la tabla está vacía.
 // reservaID es la reserva confirmada (en una base limpia: Reserva 2).
@@ -16,6 +20,8 @@ func Sembrar(db *gorm.DB, reservaID uint) {
 			Nombre:           "Picadito del sábado",
 			CupoMaximo:       10,
 			CodigoInvitacion: "ABC123",
+			CreadoEn:         time.Now().UTC(),
+			Estado:           EstadoActivo,
 		},
 	}
 	db.Create(&datos)

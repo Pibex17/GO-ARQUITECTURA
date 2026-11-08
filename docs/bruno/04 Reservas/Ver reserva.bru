@@ -1,0 +1,22 @@
+meta {
+  name: Ver reserva
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/reservas/{{reservaId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenCliente}}
+}
+
+tests {
+  test("200 con pagos", function() {
+    expect(res.status).to.equal(200);
+    expect(res.body.datos).to.have.property("Pagos");
+  });
+}

@@ -1,0 +1,38 @@
+meta {
+  name: Crear reserva
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/reservas
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenCliente}}
+}
+
+body:json {
+  {
+    "CanchaID": 1,
+    "Fecha": "2026-10-21",
+    "HoraInicio": "18:00",
+    "HoraFin": "19:00"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setEnvVar("reservaId", String(res.body.datos.ID));
+    bru.setEnvVar("sagaId", "reserva-" + res.body.datos.ID);
+  }
+}
+
+tests {
+  test("201 y reserva pendiente", function() {
+    expect(res.status).to.equal(201);
+    expect(res.body.datos.Estado).to.equal("pendiente");
+  });
+}

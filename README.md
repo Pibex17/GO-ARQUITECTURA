@@ -1,173 +1,245 @@
-# Sistema de reservas de canchas de fútbol sintéticas y organización de partidos
+# ServA · Canchas Sintéticas
 
-Servidor HTTP en Go (Chi + GORM/PostgreSQL) para los Hitos 1 y 2 de Aplicaciones Web II. Incluye autenticación con JWT, roles, propiedad de recursos y el contrato OpenAPI 3.1 de todos los endpoints implementados.
+Servidor HTTP en Go (Chi + GORM/PostgreSQL) para reservar canchas sintéticas,
+cobrar la seña y organizar partidos. La versión actual migra el flujo síncrono
+a una **Saga Coreografía** con eventos de dominio, outbox transaccional y API
+asíncrona (`202 Accepted` + `GET /sagas/{id}`).
 
-## Arranque rápido (Windows)
+## Qué cambió
 
-Doble clic en **`iniciar.bat`**. El script hace todo solo:
+| Antes (API síncrona) | Ahora (Saga Coreografía) |
+| --- | --- |
+| `PATCH /reservas/{id}/estado` hacía todo en un handler: creaba el pago, lo verificaba y guardaba la reserva. | El handler valida y publica un hecho (`SenaDeclarada`, `SenaAprobada`, …). Cada contexto reacciona y publica el siguiente hecho. |
+| La respuesta era `200` con la reserva ya mutada. | La respuesta es `202 Accepted` con `saga_id` y `Location: /sagas/{id}`. El cliente consulta la saga. |
+| `POST /partidos` creaba el partido en el mismo request. | El handler publica `SolicitudPartidoRecibida`; `partidos` crea el partido cuando `reservas` valida. |
+| Cancelar solo cambiaba el estado de la reserva. | Cancelar dispara compensaciones: se anula la seña y se cancela el partido. |
+| Un paquete `reservas` era dueño de reservas y pagos. | `reservas` y `pagos` son contextos separados; se comunican por eventos. |
 
-1. Levanta PostgreSQL en Docker (`docker compose up -d db`).
-2. Espera a que la base acepte conexiones.
-3. Compila y arranca el servidor en <http://localhost:8080>.
+La API anterior y su documentación quedaron en [`docs/legacy/`](docs/legacy/)
+como historia, **no** como fuente de verdad.
 
-Deje la ventana abierta mientras usa el servidor; `Ctrl+C` lo detiene. Para apagar también la base, doble clic en **`detener.bat`** (los datos se conservan).
+## Arquitectura en una página
 
-Si no existe `.env`, `iniciar.bat` lo crea copiando `.env.example`. **Genere una clave aleatoria propia de al menos 32 bytes y péguela en `CLAVE_FIRMA` dentro de `.env`.** El servidor rechaza valores vacíos, compuestos solo por espacios, marcadores como `CAMBIE_ESTO` y claves de menos de 32 bytes. No incluya una clave real en `.env.example` ni en la documentación.
+- **Monolito modular**: un solo binario y una sola base PostgreSQL, con
+  paquetes que representan contextos delimitados.
+- **Bus de eventos en proceso**: `internal/eventos` entrega eventos a los
+  suscriptores registrados. No hay Kafka ni RabbitMQ.
+- **Outbox transaccional**: el cambio de estado y el evento se guardan en la
+  misma transacción (`tabla eventos`). Un despachador los publica después.
+- **Idempotencia**: cada consumidor registra `(evento_id, consumidor)` en
+  `eventos_procesados`; si el evento se reintenta, no se repite el efecto.
+- **Coreografía**: no hay orquestador central. `reservas`, `pagos` y
+  `partidos` reaccionan a hechos y publican los propios. `sagas` solo proyecta
+  y audita.
+- **Compensación**: los estados terminales son `cancelada` (reserva),
+  `anulado` (pago) y `cancelado` (partido). Nunca se borran filas.
 
-Si necesita recrear las tablas y los datos de ejemplo:
-
-```bat
-iniciar.bat reset
+```
+Cliente HTTP
+    │  POST/PATCH
+    ▼
+Manejador (validación síncrona: forma, rol, propiedad, transición)
+    │  inserta evento en outbox (misma transacción que el cambio)
+    ▼
+eventos (outbox) ──► Despachador ──► Bus en memoria
+                                      ├── reservas
+                                      ├── pagos
+                                      ├── partidos
+                                      └── sagas (proyección)
 ```
 
-Requisitos: Docker Desktop iniciado y Go instalado.
+Diagramas y recorridos completos: [`docs/arquitectura.md`](docs/arquitectura.md)
+y [`docs/saga-coreografia.md`](docs/saga-coreografia.md).
 
-## Cómo arrancar sin Docker
+## Requisitos
 
-```bash
-go mod tidy
-cp .env.example .env        # complete DATABASE_URL y genere CLAVE_FIRMA (32+ bytes)
-psql -U postgres -c "CREATE DATABASE canchas;"
-go run . -reset             # primera vez: crea las tablas y siembra datos de ejemplo
-```
+- Go 1.22 o superior.
+- PostgreSQL 16 (o Docker Desktop con Compose).
+- Opcional: Bruno para ejecutar [`docs/bruno/`](docs/bruno/).
+- Opcional: Redocly CLI para validar el contrato.
 
-Debe imprimir `escuchando en el puerto 8080`. En arranques posteriores, sin `-reset`.
+## Arranque rápido
 
-Variables de entorno:
-
-| Variable | Uso | Valor por defecto |
-| --- | --- | --- |
-| `DATABASE_URL` | Cadena de conexión a PostgreSQL. Incluye la contraseña; es un secreto. | Sin valor por defecto |
-| `CLAVE_FIRMA` | Secreto con el que se firman los JWT HS256. Mínimo 32 bytes; no se aceptan marcadores de ejemplo. | Sin valor por defecto |
-| `PUERTO` | Puerto HTTP. | `8080` |
-| `TIEMPO_ESPERA_SEGUNDOS` | `ReadTimeout` y `WriteTimeout` del servidor. | `5` |
-
-## Cómo arrancar con Docker
-
-No hace falta tener Go ni PostgreSQL instalados en la máquina: Docker arma los dos contenedores.
+### Con Docker Compose
 
 ```bash
+cp .env.example .env
+# edite .env y defina CLAVE_FIRMA con al menos 32 bytes aleatorios
 docker compose up --build
 ```
 
-`docker compose` lee el archivo `.env` de la raíz para sustituir `CLAVE_FIRMA`; defina ahí una clave aleatoria propia de al menos 32 bytes o pásela en el entorno antes de levantar los contenedores. La primera vez (o si borran el volumen `datos_postgres`), en otra terminal, para crear las tablas y sembrar los datos de ejemplo:
+La primera vez, o si se borró el volumen, cree el esquema y los datos de
+ejemplo:
 
 ```bash
 docker compose run --rm app -reset
 ```
 
-Dentro de Docker, `DATABASE_URL` apunta a `host=db` (el nombre del servicio en `docker-compose.yml`), no a `localhost`; ese valor se define ahí mismo, no en el `.env` que usan para correr sin Docker. El resto del comportamiento —rutas, validaciones, envoltura de respuestas— es exactamente el mismo con o sin Docker: es la misma imagen la que corre.
+El servidor queda en `http://localhost:8080`.
 
-Para bajar todo (y borrar los datos):
+### Sin Docker
 
 ```bash
-docker compose down -v
+cp .env.example .env
+# complete DATABASE_URL y CLAVE_FIRMA
+go run . -reset
 ```
+
+`-reset` borra las tablas, las vuelve a crear y siembra los datos de ejemplo.
+Sin `-reset` solo migra y siembra si las tablas están vacías.
+
+### Credenciales de ejemplo
+
+| Usuario | Clave | Rol | Usuario de negocio |
+| --- | --- | --- | --- |
+| `luis` | `luis-2026` | administrador | El Golazo |
+| `ana` | `ana-2026` | cliente | María Pérez |
+
+## Flujo asíncrono en 60 segundos
+
+```bash
+# 1. Login
+TOKEN=$(curl -s -X POST http://localhost:8080/login \
+  -H 'Content-Type: application/json' \
+  -d '{"usuario":"ana","clave":"ana-2026"}' | jq -r '.datos.token')
+
+# 2. Crear reserva
+curl -s -X POST http://localhost:8080/reservas \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"CanchaID":1,"Fecha":"2026-10-21","HoraInicio":"18:00","HoraFin":"19:00"}'
+
+# 3. Declarar la seña como administrador
+TOKEN_ADMIN=$(curl -s -X POST http://localhost:8080/login \
+  -H 'Content-Type: application/json' \
+  -d '{"usuario":"luis","clave":"luis-2026"}' | jq -r '.datos.token')
+
+curl -s -X PATCH http://localhost:8080/reservas/1/estado \
+  -H "Authorization: Bearer $TOKEN_ADMIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"NuevoEstado":"pago_por_verificar","Metodo":"efectivo","ComprobanteURL":"https://ejemplo.invalid/1.jpg"}'
+# → 202 {"ok":true,"datos":{"saga_id":"reserva-1","estado":"iniciada","paso":"iniciada"}}
+#    Location: /sagas/reserva-1
+
+# 4. Consultar la saga hasta que avance
+curl -s http://localhost:8080/sagas/reserva-1 \
+  -H "Authorization: Bearer $TOKEN_ADMIN" | jq
+```
+
+La respuesta `202` significa **aceptado, no terminado**. El cliente debe hacer
+polling de `GET /sagas/{id}`. Los fallos de negocio posteriores aparecen en la
+saga como `estado: "fallida"` y `error` con el motivo.
+
+## Endpoints
+
+Todas las respuestas usan la envoltura `{"ok": ..., "datos": ...}` o
+`{"ok": false, "error": {"codigo": ..., "mensaje": ...}}`.
+
+| Método | Ruta | Rol | Éxito | Notas |
+| --- | --- | --- | --- | --- |
+| `POST` | `/login` | público | `200` | Devuelve token JWT. |
+| `GET` | `/canchas` | cualquier sesión | `200` | Catálogo; el cliente ve activas. |
+| `POST` | `/canchas` | administrador | `201` | El dueño sale del token. |
+| `PATCH` | `/canchas/{id}` | administrador dueño | `200` | Edición parcial. |
+| `POST` | `/reservas` | cliente | `201` | Crea la reserva y `ReservaCreada`. |
+| `GET` | `/reservas` | cualquier sesión | `200` | Filtra por propiedad. |
+| `GET` | `/reservas/{id}` | dueño o admin de la cancha | `200` | Incluye `Pagos`. |
+| `PATCH` | `/reservas/{id}/estado` | administrador dueño | `202` | Inicia un paso de la saga. |
+| `GET` | `/sagas/{id}` | cualquier sesión | `200` | Estado, paso, error y recurso. |
+| `POST` | `/partidos` | cliente | `202` | Solicita crear el partido. |
+| `GET` | `/partidos/{id}` | cualquier sesión | `200` | Detalle del partido. |
+| `POST` | `/partidos/{id}/inscripciones` | cliente | `201` | Inscripción con cupo. |
+
+Contrato completo: [`docs/openapi.yaml`](docs/openapi.yaml).
+Guía con ejemplos y códigos de error: [`docs/api.md`](docs/api.md).
+
+## Estructura del repositorio
+
+```
+.
+├── main.go                     # composición: DB, bus, outbox, rutas
+├── main_integracion_test.go    # E2E con PostgreSQL y polling de sagas
+├── internal/
+│   ├── eventos/                # bus, outbox, despachador, idempotencia
+│   ├── sagas/                  # proyección y GET /sagas/{id}
+│   ├── reservas/               # Reserva + consumidores de su ciclo
+│   ├── pagos/                  # Pago/seña + consumidores
+│   ├── partidos/               # Partido + consumidores
+│   ├── canchas/
+│   ├── inscripcion/
+│   ├── sesion/
+│   ├── usuarios/
+│   ├── respuesta/
+│   ├── middleware/
+│   └── config/
+├── docs/
+│   ├── arquitectura.md
+│   ├── saga-coreografia.md
+│   ├── modelo-de-datos.md
+│   ├── api.md
+│   ├── openapi.yaml
+│   ├── api.html
+│   ├── operacion.md
+│   ├── decisiones.md
+│   ├── bruno/
+│   └── legacy/                 # documentación histórica, no autoritativa
+├── docker-compose.yml
+└── redocly.yaml
+```
+
+Regla de dependencias: `eventos` no conoce ningún contexto; `sagas` solo
+conoce `eventos`; los contextos de negocio pueden importar `eventos` y `sagas`,
+pero no al revés. `partidos` tiene una lectura de solo lectura de `reservas`
+para validar la petición antes de aceptar el `202`; la decisión de negocio
+sigue siendo de `reservas`.
 
 ## Pruebas
 
 ```bash
-go test ./... -v -count=1
-go build ./...
+# Pruebas unitarias (sin base de datos)
+go test ./...
+
+# Análisis estático
 go vet ./...
-go mod verify
-```
 
-Las pruebas unitarias de los manejadores usan dobles deterministas y no necesitan PostgreSQL.
+# Compilación
+go build ./...
 
-La prueba de extremo a extremo está en `main_integracion_test.go` y lleva la etiqueta `//go:build integration`. Usa PostgreSQL real y una base desechable:
-
-```bash
-docker compose exec -T db createdb -U postgres canchas_test
-
+# Integración: necesita una base DESECHABLE
 TEST_DATABASE_URL="host=localhost user=postgres password=postgres dbname=canchas_test port=5432 sslmode=disable" \
   go test -tags=integration . -run TestAPIExtremoAExtremo -v -count=1
 ```
 
-`prepararBase` borra y vuelve a sembrar las tablas de `canchas_test`; no apunte `TEST_DATABASE_URL` a la base de trabajo. Sin esa variable, la prueba se omite y `go test ./...` sigue funcionando sin Docker.
+La prueba de integración crea una reserva, recorre pago → confirmación →
+jugada, crea un partido y verifica la compensación al cancelar (seña anulada y
+partido cancelado).
 
-## Documentación de la API
+En Windows, si el antivirus bloquea los ejecutables temporales de Go, use:
 
-- **`docs/openapi.yaml`**: contrato OpenAPI 3.1, fuente de verdad de la documentación.
-- **`docs/api.html`**: página estática generada desde el contrato con Redoc 3. Se puede abrir directamente con doble clic: el contrato y el bundle de Redoc están embebidos y no hay dependencias de CDN ni de un servidor local.
-
-Validación y regeneración:
-
-```bash
-npx @redocly/cli@2.71.0 lint docs/openapi.yaml
-npx @redocly/cli@2.71.0 build-docs docs/openapi.yaml -o docs/api.html --inlineBundle
+```powershell
+$env:GOTMPDIR="$env:TEMP\gotmp"
+go test ./...
 ```
 
-En PowerShell, si la política de ejecución bloquea `npx.ps1`, use `cmd /c "npx ..."`. `docs/api.html` es un archivo generado: para cambiar la documentación edite `docs/openapi.yaml` y vuelva a ejecutar el comando de `build-docs`.
+## Documentación
 
-El contrato documenta los **11 endpoints implementados**:
+| Documento | Contenido |
+| --- | --- |
+| [`docs/arquitectura.md`](docs/arquitectura.md) | Contextos, bus, outbox, dependencias y diagramas. |
+| [`docs/saga-coreografia.md`](docs/saga-coreografia.md) | Catálogo de eventos, pasos y compensaciones. |
+| [`docs/modelo-de-datos.md`](docs/modelo-de-datos.md) | Tablas, columnas, relaciones y estados. |
+| [`docs/api.md`](docs/api.md) | Contrato funcional, ejemplos y errores. |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | Contrato OpenAPI 3.1. |
+| [`docs/operacion.md`](docs/operacion.md) | Arranque, migraciones, logs y diagnóstico. |
+| [`docs/decisiones.md`](docs/decisiones.md) | ADRs de la migración. |
+| [`docs/bruno/`](docs/bruno/) | Colección Bruno de la API asíncrona. |
+| [`docs/legacy/`](docs/legacy/) | Documentación histórica. |
 
-| Método | Ruta | Quién puede | Éxito | Errores reales |
-| --- | --- | --- | --- | --- |
-| POST | `/login` | Público | `200` con `datos.token` (JWT HS256, 1 hora) | `400 cuerpo_malformado` · `401 credenciales_invalidas` · `500 error_interno` |
-| GET | `/canchas` | Cualquier sesión | `200` lista; cliente ve activas, administrador ve las propias | `400 id_invalido` · `401` · `403 permiso_denegado` / `cuenta_sin_vinculo` · `500 error_base` |
-| POST | `/canchas` | Administrador | `201` cancha creada y activa | `400 cuerpo_malformado` · `401` · `403` · `422 datos_invalidos` / `tipo_invalido` · `500` |
-| PATCH | `/canchas/{id}` | Administrador dueño | `200` cancha actualizada | `400 id_invalido` / `cuerpo_malformado` · `401` · `403` · `404 no_encontrado` · `422 tipo_invalido` · `500` |
-| POST | `/reservas` | Cliente | `201` reserva en estado `pendiente` | `400 cuerpo_malformado` · `401` · `403` · `409 horario_ocupado` · `422 datos_invalidos` / `cancha_invalida` · `500` |
-| GET | `/reservas` | Cualquier sesión | `200` reservas propias (cliente) o de sus canchas (administrador) | `400 id_invalido` · `401` · `403` · `500` |
-| GET | `/reservas/{id}` | Cualquier sesión, con propiedad | `200` reserva con sus pagos | `400 id_invalido` · `401` · `403` · `404 no_encontrado` · `500` |
-| PATCH | `/reservas/{id}/estado` | Administrador dueño | `200` reserva con el nuevo estado | `400 id_invalido` / `cuerpo_malformado` · `401` · `403` · `404 no_encontrado` · `422 estado_invalido` / `transicion_invalida` · `500` |
-| POST | `/partidos` | Cliente dueño de la reserva | `201` partido creado con código de invitación | `400 cuerpo_malformado` · `401` · `403` · `404 no_encontrado` · `409 partido_existente` · `422 datos_invalidos` / `reserva_no_confirmada` · `500` |
-| GET | `/partidos/{id}` | Cualquier token válido | `200` `{partido, inscriptos, cupos_restantes}` | `400 id_invalido` · `401` · `404 no_encontrado` · `500` |
-| POST | `/partidos/{id}/inscripciones` | Cliente | `201` inscripción creada | `400 id_invalido` / `cuerpo_malformado` · `401` · `403` · `404 no_encontrado` · `409 ya_inscripto` / `partido_lleno` · `422 datos_invalidos` / `codigo_invalido` · `500` |
-| * | Ruta inexistente | — | — | `404 ruta_inexistente` |
-| * | Método no permitido en una ruta existente | — | — | `405 metodo_no_permitido` |
+## Uso de IA
 
-Notas que el contrato refleja porque son el comportamiento real del servidor:
-
-- Los modelos se serializan en **PascalCase** (`CanchaID`, `ClienteID`, `HoraInicio`, `PrecioHora`, `Pagos`, etc.) porque no tienen etiquetas `json`. La solicitud de login usa `usuario` y `clave`; el detalle de partido usa `partido`, `inscriptos` y `cupos_restantes`.
-- `PATCH /reservas/{id}/estado` es **solo para administrador**. Una transición prohibida responde `422 transicion_invalida`; no es `400`.
-- `POST /reservas` no acepta `requiere_comprobante`: ese campo no existe en el servidor actual.
-- Las fechas y horas son cadenas no vacías. El servidor no valida formato, calendario ni solapamiento por `HoraFin`; el conflicto se comprueba por `CanchaID`, `Fecha` y `HoraInicio`.
-- Al pasar una reserva a `pago_por_verificar` se crea una seña del 30 % de `PrecioHora`; al pasar a `confirmada` se marca la seña pendiente como verificada; al pasar a `cancelada` no se modifican los pagos.
-- `GET /partidos/{id}` solo exige un token válido: no resuelve el vínculo de negocio ni aplica propiedad.
-
-## Estructura
-
-```text
-.
-├── main.go                     # configuración, conexión, migrate/siembra y servidor
-├── main_integracion_test.go    # prueba E2E con //go:build integration
-├── go.mod / go.sum
-├── iniciar.bat                 # arranque rápido en Windows (base + servidor)
-├── detener.bat                 # apaga la base de datos
-├── .env.example                # plantilla; sí se sube
-├── .env                        # valores reales; NO se sube (está en .gitignore)
-├── .github/workflows/          # CI de pruebas
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── redocly.yaml                # reglas de validación del contrato
-├── docs/
-│   ├── openapi.yaml            # contrato OpenAPI 3.1
-│   ├── api.html                # Redoc 3 generado, autocontenido
-│   ├── arquitectura.md         # capas, dependencias y ubicación de las reglas
-│   ├── decisiones.md           # decisiones de diseño (D1–D6)
-│   ├── hito2_hoja.md           # guion de demostración y cumplimiento
-│   ├── hito2_bruno/            # colección Bruno y capturas
-│   ├── hito1_addendum.md
-│   └── hito1_ficha_del_negocio.md
-└── internal/
-    ├── respuesta/              # envoltura única {"ok": ...}
-    ├── middleware/             # Registro y Recuperacion
-    ├── config/                 # lee .env y variables del sistema
-    ├── usuarios/               # Usuario (cliente/administrador)
-    ├── sesion/                 # login, JWT, roles y vínculos de negocio
-    ├── canchas/                # Cancha, Horario + catálogo
-    ├── reservas/               # Reserva, Pagos, máquina de estados y seña
-    ├── partidos/               # Partido y detalle con cupos
-    └── inscripcion/            # Inscripción a partidos
-```
-
-## Declaración de IA
-
-Usamos Claude (Anthropic) para redactar el esqueleto completo del servidor (paquetes `respuesta`, `middleware`, `config`, `usuarios`, `canchas`, `reservas`, `main.go` y las pruebas), siguiendo la estructura enseñada en los talleres de las semanas 2 a 4, adaptada a nuestro negocio. Las reglas de negocio (seña del 30 %, máquina de estados, validaciones propias) fueron decisiones nuestras, discutidas antes de escribir el código.
-
-En el Hito 2 se usó IA como apoyo para revisar la autenticación JWT, la autorización por rol y propiedad, los dobles de prueba y el contrato OpenAPI. Las decisiones de alcance y los cambios se revisaron contra el código que realmente se ejecuta; los ejemplos de la documentación son ficticios y no contienen tokens ni contraseñas reales.
-
-En la revisión final del Hito 2 se usó DeepSeek V4.1 Flash como apoyo para contrastar la lista de comprobación, revisar la documentación y proponer cambios. Cada propuesta se validó ejecutando las pruebas y revisando el diff; las decisiones de negocio y la entrega siguen siendo responsabilidad del equipo.
+Se usó IA como apoyo para revisar la migración a Saga Coreografía, contrastar
+el catálogo de eventos y proponer pruebas y documentación. Cada propuesta se
+validó con `go test ./...`, `go vet ./...`, `go build ./...` y la prueba de
+integración. Las decisiones de negocio y la responsabilidad de la entrega
+siguen siendo del equipo. Los ejemplos y credenciales de este README son
+ficticios.

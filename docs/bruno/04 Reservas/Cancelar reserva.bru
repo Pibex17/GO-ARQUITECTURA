@@ -1,0 +1,27 @@
+meta {
+  name: Cancelar reserva
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/reservas/{{reservaId}}/estado
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenAdmin}}
+}
+
+body:json {
+  {
+    "NuevoEstado": "cancelada"
+  }
+}
+
+tests {
+  test("202 aceptado", function() {
+    expect(res.status).to.equal(202);
+  });
+}

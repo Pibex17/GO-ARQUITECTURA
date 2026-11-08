@@ -1,6 +1,7 @@
 package reservas // el MISMO paquete que manejadores.go
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,8 @@ import (
 	"gorm.io/gorm"
 
 	"canchas-sinteticas/internal/canchas"
+	"canchas-sinteticas/internal/eventos"
+	"canchas-sinteticas/internal/sagas"
 	"canchas-sinteticas/internal/sesion"
 	"canchas-sinteticas/internal/usuarios"
 )
@@ -302,14 +305,11 @@ type repoReservasFalso struct {
 	errListar    error
 	errReserva   error
 	errGuardar   error
-	errPago      error
-	errVerificar error
 
-	filtro         FiltroReservas
-	creada         *Reserva
-	guardada       *Reserva
-	pagoCreado     *Pago
-	pagoVerificado bool
+	filtro   FiltroReservas
+	creada   *Reserva
+	guardada *Reserva
+	evento   *eventos.Evento
 }
 
 func (r *repoReservasFalso) CanchaPorID(id uint) (canchas.Cancha, error) {
@@ -327,7 +327,7 @@ func (r *repoReservasFalso) HayConflicto(uint, string, string) (bool, error) {
 	return r.conflicto, r.errConflicto
 }
 
-func (r *repoReservasFalso) CrearReserva(reserva *Reserva) error {
+func (r *repoReservasFalso) CrearReservaConEvento(reserva *Reserva, nuevoEvento ConstructorEvento) error {
 	if r.errCrear != nil {
 		return r.errCrear
 	}
@@ -338,6 +338,8 @@ func (r *repoReservasFalso) CrearReserva(reserva *Reserva) error {
 	*reserva = copia
 	r.creada = &copia
 	r.reservas = append(r.reservas, copia)
+	evento := nuevoEvento(&copia)
+	r.evento = &evento
 	return nil
 }
 
@@ -380,7 +382,11 @@ func (r *repoReservasFalso) ReservaPorID(id uint) (Reserva, error) {
 	return Reserva{}, gorm.ErrRecordNotFound
 }
 
-func (r *repoReservasFalso) GuardarReserva(reserva *Reserva) error {
+func (r *repoReservasFalso) ReservaPorIDEnTx(_ *gorm.DB, id uint) (Reserva, error) {
+	return r.ReservaPorID(id)
+}
+
+func (r *repoReservasFalso) GuardarReservaEnTx(_ *gorm.DB, reserva *Reserva) error {
 	if r.errGuardar != nil {
 		return r.errGuardar
 	}
@@ -396,26 +402,63 @@ func (r *repoReservasFalso) GuardarReserva(reserva *Reserva) error {
 	return nil
 }
 
-func (r *repoReservasFalso) CrearPago(pago *Pago) error {
-	if r.errPago != nil {
-		return r.errPago
+// publicadorFalso registra los eventos publicados por el manejador.
+type publicadorFalso struct {
+	eventos []eventos.Evento
+	err     error
+}
+
+func (p *publicadorFalso) Publicar(_ context.Context, evento eventos.Evento) error {
+	if p.err != nil {
+		return p.err
 	}
-	copia := *pago
-	r.pagoCreado = &copia
+	p.eventos = append(p.eventos, evento)
 	return nil
 }
 
-func (r *repoReservasFalso) MarcarPagoSenaVerificado(uint) error {
-	if r.errVerificar != nil {
-		return r.errVerificar
+// sagasFalsas devuelve una proyección mínima sin base de datos.
+type sagasFalsas struct {
+	saga sagas.Saga
+	err  error
+}
+
+func (s sagasFalsas) Asegurar(_ context.Context, tipo string, agregadoID uint) (sagas.Saga, error) {
+	if s.err != nil {
+		return sagas.Saga{}, s.err
 	}
-	r.pagoVerificado = true
-	return nil
+	if s.saga.ID != "" {
+		return s.saga, nil
+	}
+	return sagas.Saga{
+		ID:         sagas.IDDeReserva(agregadoID),
+		Tipo:       tipo,
+		AgregadoID: agregadoID,
+		Estado:     sagas.EstadoIniciada,
+		Paso:       "iniciada",
+	}, nil
+}
+
+func (s sagasFalsas) Obtener(_ context.Context, id string) (sagas.Saga, error) {
+	return s.saga, s.err
 }
 
 func enrutadorCon(repo Repositorio, vinculos sesion.ResolutorVinculos) http.Handler {
+	return enrutadorConDependencias(repo, vinculos, &publicadorFalso{}, sagasFalsas{})
+}
+
+func enrutadorConDependencias(
+	repo Repositorio,
+	vinculos sesion.ResolutorVinculos,
+	publicador eventos.Publicador,
+	registro sagas.Registro,
+) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Repo: repo, Vinculos: vinculos}).Rutas(r, tokensDePrueba)
+	(&Manejador{
+		Repo:     repo,
+		Vinculos: vinculos,
+		Eventos:  publicador,
+		Sagas:    registro,
+	}).Rutas(r, tokensDePrueba)
 	return r
 }
 
@@ -762,15 +805,17 @@ func TestTransicionInvalidaResponde422(t *testing.T) {
 	}
 }
 
-// TestAdministradorCambiaReservaDeSuCancha cubre el caso 4.
+// TestAdministradorCambiaReservaDeSuCancha cubre el caso 4: el manejador
+// valida y publica, pero el cambio de estado lo aplica la saga.
 func TestAdministradorCambiaReservaDeSuCancha(t *testing.T) {
 	repo := &repoReservasFalso{
 		canchas:  map[uint]canchas.Cancha{1: {ID: 1, AdministradorID: 1}},
 		reservas: []Reserva{{ID: 1, CanchaID: 1, ClienteID: 2, Estado: "confirmada"}},
 	}
-	enrutador := enrutadorCon(repo, vinculosFalsos{
+	publicador := &publicadorFalso{}
+	enrutador := enrutadorConDependencias(repo, vinculosFalsos{
 		usuario: usuarios.Usuario{ID: 1, Rol: sesion.RolAdministrador},
-	})
+	}, publicador, sagasFalsas{})
 
 	peticion := httptest.NewRequest(http.MethodPatch, "/reservas/1/estado",
 		strings.NewReader(`{"NuevoEstado":"jugada"}`))
@@ -778,12 +823,18 @@ func TestAdministradorCambiaReservaDeSuCancha(t *testing.T) {
 	grabadora := httptest.NewRecorder()
 	enrutador.ServeHTTP(grabadora, peticion)
 
-	if grabadora.Code != http.StatusOK {
-		t.Fatalf("se esperaba 200 y llegó %d con cuerpo %s",
+	if grabadora.Code != http.StatusAccepted {
+		t.Fatalf("se esperaba 202 y llegó %d con cuerpo %s",
 			grabadora.Code, grabadora.Body.String())
 	}
-	if repo.guardada == nil || repo.guardada.Estado != "jugada" {
-		t.Fatalf("la reserva no quedó jugada: %+v", repo.guardada)
+	if len(publicador.eventos) != 1 || publicador.eventos[0].Tipo != eventos.TipoJugadaSolicitada {
+		t.Fatalf("no se publicó la jugada esperada: %+v", publicador.eventos)
+	}
+	if repo.guardada != nil {
+		t.Fatal("el manejador no debe cambiar el estado directamente")
+	}
+	if ubicacion := grabadora.Header().Get("Location"); ubicacion != "/sagas/reserva-1" {
+		t.Fatalf("Location inesperado: %q", ubicacion)
 	}
 }
 

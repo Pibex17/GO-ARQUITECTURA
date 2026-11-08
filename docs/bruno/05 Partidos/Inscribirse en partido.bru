@@ -1,0 +1,27 @@
+meta {
+  name: Inscribirse en partido
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/partidos/{{partidoId}}/inscripciones
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{tokenCliente}}
+}
+
+body:json {
+  {
+    "CodigoInvitacion": "A1B2C3"
+  }
+}
+
+tests {
+  test("201 o error de código", function() {
+    expect([201, 422]).to.include(res.status);
+  });
+}

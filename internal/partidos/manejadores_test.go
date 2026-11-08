@@ -1,6 +1,7 @@
 package partidos
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
+	"canchas-sinteticas/internal/eventos"
 	"canchas-sinteticas/internal/reservas"
+	"canchas-sinteticas/internal/sagas"
 	"canchas-sinteticas/internal/sesion"
 	"canchas-sinteticas/internal/usuarios"
 )
@@ -241,7 +244,7 @@ func (r *repoPartidosFalso) ContarInscripciones(uint) (int64, error) {
 	return r.inscripciones, r.errInscripciones
 }
 
-func (r *repoPartidosFalso) CrearPartido(partido *Partido) error {
+func (r *repoPartidosFalso) CrearPartidoEnTx(_ *gorm.DB, partido *Partido) error {
 	if r.errCrear != nil {
 		return r.errCrear
 	}
@@ -250,20 +253,86 @@ func (r *repoPartidosFalso) CrearPartido(partido *Partido) error {
 	return nil
 }
 
+func (r *repoPartidosFalso) PartidoPorReservaIDEnTx(_ *gorm.DB, reservaID uint) (Partido, error) {
+	return r.PartidoPorReservaID(reservaID)
+}
+
+func (r *repoPartidosFalso) GuardarPartidoEnTx(_ *gorm.DB, partido *Partido) error {
+	copia := *partido
+	r.partido = &copia
+	return nil
+}
+
+// publicadorFalso registra los eventos publicados por el manejador.
+type publicadorFalso struct {
+	eventos []eventos.Evento
+	err     error
+}
+
+func (p *publicadorFalso) Publicar(_ context.Context, evento eventos.Evento) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.eventos = append(p.eventos, evento)
+	return nil
+}
+
+// sagasFalsas devuelve una proyección mínima sin base de datos.
+type sagasFalsas struct {
+	saga sagas.Saga
+	err  error
+}
+
+func (s sagasFalsas) Asegurar(_ context.Context, tipo string, agregadoID uint) (sagas.Saga, error) {
+	if s.err != nil {
+		return sagas.Saga{}, s.err
+	}
+	if s.saga.ID != "" {
+		return s.saga, nil
+	}
+	return sagas.Saga{
+		ID:         sagas.IDDeReserva(agregadoID),
+		Tipo:       tipo,
+		AgregadoID: agregadoID,
+		Estado:     sagas.EstadoIniciada,
+		Paso:       "iniciada",
+	}, nil
+}
+
+func (s sagasFalsas) Obtener(_ context.Context, id string) (sagas.Saga, error) {
+	return s.saga, s.err
+}
+
 func enrutadorCon(repo Repositorio, vinculos sesion.ResolutorVinculos) http.Handler {
+	return enrutadorConDependencias(repo, vinculos, &publicadorFalso{}, sagasFalsas{})
+}
+
+func enrutadorConDependencias(
+	repo Repositorio,
+	vinculos sesion.ResolutorVinculos,
+	publicador eventos.Publicador,
+	registro sagas.Registro,
+) http.Handler {
 	r := chi.NewRouter()
-	(&Manejador{Repo: repo, Vinculos: vinculos}).Rutas(r, tokensDePrueba)
+	(&Manejador{
+		Repo:     repo,
+		Vinculos: vinculos,
+		Eventos:  publicador,
+		Sagas:    registro,
+	}).Rutas(r, tokensDePrueba)
 	return r
 }
 
-// TestClienteCreaPartidoDeSuReserva cubre el caso 1 para partidos.
+// TestClienteCreaPartidoDeSuReserva comprueba que el manejador acepta la
+// solicitud con 202 y publica el evento; el partido lo crea la saga.
 func TestClienteCreaPartidoDeSuReserva(t *testing.T) {
 	repo := &repoPartidosFalso{
 		reserva: reservas.Reserva{ID: 1, ClienteID: 2, Estado: "confirmada"},
 	}
-	enrutador := enrutadorCon(repo, vinculosFalsos{
+	publicador := &publicadorFalso{}
+	enrutador := enrutadorConDependencias(repo, vinculosFalsos{
 		usuario: usuarios.Usuario{ID: 2, Rol: sesion.RolCliente},
-	})
+	}, publicador, sagasFalsas{})
 
 	peticion := httptest.NewRequest(http.MethodPost, "/partidos",
 		strings.NewReader(`{"ReservaID":1,"Nombre":"Amistoso","CupoMaximo":10}`))
@@ -271,12 +340,15 @@ func TestClienteCreaPartidoDeSuReserva(t *testing.T) {
 	grabadora := httptest.NewRecorder()
 	enrutador.ServeHTTP(grabadora, peticion)
 
-	if grabadora.Code != http.StatusCreated {
-		t.Fatalf("se esperaba 201 y llegó %d con cuerpo %s",
+	if grabadora.Code != http.StatusAccepted {
+		t.Fatalf("se esperaba 202 y llegó %d con cuerpo %s",
 			grabadora.Code, grabadora.Body.String())
 	}
-	if repo.creado == nil || repo.creado.ReservaID != 1 {
-		t.Fatalf("no se creó el partido esperado: %+v", repo.creado)
+	if len(publicador.eventos) != 1 || publicador.eventos[0].Tipo != eventos.TipoSolicitudPartidoRecibida {
+		t.Fatalf("no se publicó la solicitud esperada: %+v", publicador.eventos)
+	}
+	if repo.creado != nil {
+		t.Fatal("el manejador no debe crear el partido directamente")
 	}
 }
 

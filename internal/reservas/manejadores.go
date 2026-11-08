@@ -9,18 +9,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
+	"canchas-sinteticas/internal/eventos"
 	"canchas-sinteticas/internal/respuesta"
+	"canchas-sinteticas/internal/sagas"
 	"canchas-sinteticas/internal/sesion"
 	"canchas-sinteticas/internal/usuarios"
 )
 
 // Manejador guarda la conexión y las piezas que se pueden sustituir en las
-// pruebas. Si Repo o Vinculos quedan en nil, se usan las implementaciones
-// GORM sobre DB; así main.go no cambia y las pruebas pueden usar dobles.
+// pruebas. Si Repo, Vinculos, Eventos o Sagas quedan en nil, se usan las
+// implementaciones GORM sobre DB.
 type Manejador struct {
 	DB       *gorm.DB
 	Repo     Repositorio
 	Vinculos sesion.ResolutorVinculos
+	Eventos  eventos.Publicador
+	Sagas    sagas.Registro
 }
 
 func (m *Manejador) repositorio() Repositorio {
@@ -37,9 +41,23 @@ func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
 }
 
+func (m *Manejador) eventos() eventos.Publicador {
+	if m.Eventos != nil {
+		return m.Eventos
+	}
+	return eventos.NuevoPublicador(m.DB, eventos.RepositorioOutboxGORM{DB: m.DB})
+}
+
+func (m *Manejador) sagas() sagas.Registro {
+	if m.Sagas != nil {
+		return m.Sagas
+	}
+	return sagas.NuevoCoordinador(sagas.RepositorioGORM{DB: m.DB})
+}
+
 // Rutas registra aquí las rutas de este paquete, para no llenar main.go.
 // El cliente crea sus reservas y ambos roles consultan; el cambio de
-// estado es solo del administrador (decisión J2 y rúbrica del Hito 2).
+// estado es solo del administrador y responde 202 con la saga asociada.
 func (m *Manejador) Rutas(r chi.Router, tokens *sesion.Tokens) {
 	conSesion := r.With(tokens.Autenticar)
 	soloCliente := conSesion.With(sesion.SoloRol(sesion.RolCliente))
@@ -157,7 +175,17 @@ func (m *Manejador) crear(w http.ResponseWriter, r *http.Request) {
 		HoraFin:    entrada.HoraFin,
 		Estado:     "pendiente", // el servidor decide el estado inicial
 	}
-	if err := m.repositorio().CrearReserva(&reserva); err != nil {
+	constructorEvento := func(creada *Reserva) eventos.Evento {
+		return eventos.NuevoEvento(
+			eventos.TipoReservaCreada, creada.ID,
+			sagas.IDDeReserva(creada.ID), eventos.NuevoID(), "",
+			eventos.ReservaCreada{
+				ReservaID: creada.ID,
+				CanchaID:  creada.CanchaID,
+				ClienteID: creada.ClienteID,
+			})
+	}
+	if err := m.repositorio().CrearReservaConEvento(&reserva, constructorEvento); err != nil {
 		respuesta.Error(w, http.StatusInternalServerError,
 			"error_base", "no se pudo guardar la reserva")
 		return
@@ -358,44 +386,59 @@ func (m *Manejador) cambiarEstado(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. La transición pedida tiene que estar permitida (Sección 5 de la ficha).
-	// El Hito 2 exige 422 para la transición prohibida.
+	// 5. La transición pedida tiene que estar permitida.
 	if !transicionPermitida(reserva.Estado, entrada.NuevoEstado) {
 		respuesta.Error(w, http.StatusUnprocessableEntity,
 			"transicion_invalida", "no se puede pasar de "+reserva.Estado+" a "+entrada.NuevoEstado)
 		return
 	}
 
-	// 6. Efectos según a qué estado se pasa.
-	switch entrada.NuevoEstado {
-	case "pago_por_verificar":
-		pago := NuevoPagoSena(reserva.ID, cancha.PrecioHora,
-			entrada.Metodo, entrada.ComprobanteURL)
-		if err := m.repositorio().CrearPago(&pago); err != nil {
-			respuesta.Error(w, http.StatusInternalServerError,
-				"error_base", "no se pudo registrar el pago")
-			return
-		}
-	case "confirmada":
-		if err := m.repositorio().MarcarPagoSenaVerificado(reserva.ID); err != nil {
-			respuesta.Error(w, http.StatusInternalServerError,
-				"error_base", "no se pudo verificar el pago")
-			return
-		}
-	}
-
-	reserva.Estado = entrada.NuevoEstado
-	if err := m.repositorio().GuardarReserva(&reserva); err != nil {
-		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo actualizar la reserva")
-		return
-	}
-
-	actualizada, err := m.repositorio().ReservaPorID(reserva.ID)
+	// 6. Asegurar la proyección de la saga antes de publicar el hecho.
+	saga, err := m.sagas().Asegurar(r.Context(), sagas.TipoCicloReserva, reserva.ID)
 	if err != nil {
 		respuesta.Error(w, http.StatusInternalServerError,
-			"error_base", "no se pudo leer la reserva actualizada")
+			"error_base", "no se pudo preparar la saga de la reserva")
 		return
 	}
-	respuesta.Exito(w, http.StatusOK, actualizada)
+
+	// 7. Publicar el hecho que inicia el paso correspondiente de la saga.
+	correlacion := eventos.NuevoID()
+	var evento eventos.Evento
+	switch entrada.NuevoEstado {
+	case "pago_por_verificar":
+		evento = eventos.NuevoEvento(eventos.TipoSenaDeclarada, reserva.ID,
+			saga.ID, correlacion, "",
+			eventos.SenaDeclarada{
+				ReservaID:      reserva.ID,
+				CanchaID:       reserva.CanchaID,
+				PrecioHora:     cancha.PrecioHora,
+				Metodo:         entrada.Metodo,
+				ComprobanteURL: entrada.ComprobanteURL,
+			})
+	case "confirmada":
+		evento = eventos.NuevoEvento(eventos.TipoSenaAprobada, reserva.ID,
+			saga.ID, correlacion, "",
+			eventos.SenaAprobada{ReservaID: reserva.ID})
+	case "cancelada":
+		evento = eventos.NuevoEvento(eventos.TipoCancelacionSolicitada, reserva.ID,
+			saga.ID, correlacion, "",
+			eventos.CancelacionSolicitada{ReservaID: reserva.ID})
+	case "jugada":
+		evento = eventos.NuevoEvento(eventos.TipoJugadaSolicitada, reserva.ID,
+			saga.ID, correlacion, "",
+			eventos.JugadaSolicitada{ReservaID: reserva.ID})
+	}
+
+	if err := m.eventos().Publicar(r.Context(), evento); err != nil {
+		respuesta.Error(w, http.StatusInternalServerError,
+			"error_base", "no se pudo publicar el evento de la reserva")
+		return
+	}
+
+	w.Header().Set("Location", "/sagas/"+saga.ID)
+	respuesta.Exito(w, http.StatusAccepted, map[string]any{
+		"saga_id": saga.ID,
+		"estado":  saga.Estado,
+		"paso":    saga.Paso,
+	})
 }

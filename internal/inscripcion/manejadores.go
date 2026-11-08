@@ -35,8 +35,7 @@ func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 	return sesion.Vinculos{Repo: sesion.RepositorioVinculosGORM{DB: m.DB}}
 }
 
-// Rutas: inscribirse es solo del cliente según la tabla de roles de la
-// ficha Hito 1 (sección 6); el administrador no se inscribe.
+// Rutas: inscribirse es solo del cliente; el administrador no se inscribe.
 func (m *Manejador) Rutas(r chi.Router, tokens *sesion.Tokens) {
 	conSesion := r.With(tokens.Autenticar)
 	soloCliente := conSesion.With(sesion.SoloRol(sesion.RolCliente))

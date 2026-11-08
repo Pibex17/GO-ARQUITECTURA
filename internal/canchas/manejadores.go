@@ -36,7 +36,7 @@ func (m *Manejador) vinculos() sesion.ResolutorVinculos {
 
 // Rutas registra aquí las rutas de este paquete, para no llenar main.go.
 // GET /canchas es para cualquier sesión; crear y editar son solo del
-// administrador (ficha Hito 1, secciones 6 y 7).
+// administrador dueño de la cancha.
 func (m *Manejador) Rutas(r chi.Router, tokens *sesion.Tokens) {
 	conSesion := r.With(tokens.Autenticar)
 	soloAdmin := conSesion.With(sesion.SoloRol(sesion.RolAdministrador))
